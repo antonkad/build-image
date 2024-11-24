@@ -120,6 +120,7 @@ func (m *Build) Build(
 		ExitCode:  exitCode,
 		Commit:    version,
 		ProjectID: "mwe47v732g3llus",
+		Timestamp: time.Now(),
 	}
 
 	// Push logs to the API
