@@ -27,21 +27,32 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/rand/v2"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type Build struct{}
 type LogRecord struct {
-	ID        string    `json:"id,omitempty"`
-	Command   string    `json:"command,omitempty"`
-	Stdout    string    `json:"stdout,omitempty"`
-	Stderr    string    `json:"stderr,omitempty"`
-	ExitCode  int       `json:"exitCode,omitempty"`
-	Commit    string    `json:"commit,omitempty"`
-	ProjectID string    `json:"projectID,omitempty"`
-	Timestamp time.Time `json:"timestamp,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Command   string `json:"command,omitempty"`
+	Stdout    string `json:"stdout,omitempty"`
+	Stderr    string `json:"stderr,omitempty"`
+	ExitCode  int    `json:"exitCode,omitempty"`
+	Ref       string `json:"ref,omitempty"`
+	ProjectID string `json:"project,omitempty"`
+}
+
+var frameworkConfig = map[string]struct {
+	DefaultPort     int
+	BuildOutputPath string
+}{
+	"next":    {DefaultPort: 3000, BuildOutputPath: ".next"},
+	"react":   {DefaultPort: 3000, BuildOutputPath: "build"},
+	"angular": {DefaultPort: 4200, BuildOutputPath: "dist/<project-name>"},
+	"vue":     {DefaultPort: 8080, BuildOutputPath: "dist"},
+	"svelte":  {DefaultPort: 5000, BuildOutputPath: "public"},
 }
 
 func (m *Build) BuildEnv(source *dagger.Directory) *dagger.Container {
@@ -61,17 +72,71 @@ func (m *Build) BuildEnv(source *dagger.Directory) *dagger.Container {
 
 }
 
-func (m *Build) Build(
+func (m *Build) Publish(
 	ctx context.Context,
+	// +optional
+	id string,
 	repository string,
 	// +optional
 	ref string,
 	// +optional
 	path string,
+	// +optional
+	projectID string,
+	framework,
+	// +optional
+	packageManager string,
+	// +optional
+	ExposedPort *int,
+) (string, error) {
+	if projectID == "" {
+		projectID = "manual"
+	}
+
+	var container *dagger.Container
+	var err error
+
+	switch framework {
+	case "next":
+		container, err = m.BuildNext(ctx, id, repository, ref, path, projectID, framework, packageManager, ExposedPort)
+	case "react", "angular", "vue", "svelte":
+		container, err = m.BuildNginx(ctx, id, repository, ref, path, projectID, framework, packageManager, ExposedPort)
+	default:
+		return "", fmt.Errorf("unsupported framework: %s", framework)
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("error building %s: %w", framework, err)
+	}
+	addr, err := container.Publish(ctx, fmt.Sprintf("ttl.sh/%s-%.0f", projectID, math.Floor(rand.Float64()*10000000)))
+	if err != nil {
+		return "", err
+	}
+	return addr, err
+}
+
+func (m *Build) Build(
+	ctx context.Context,
+	// +optional
+	id string,
+	repository string,
+	// +optional
+	ref string,
+	// +optional
+	path string,
+	// +optional
+	projectID string,
+	// +optional
+	packageManager string,
 ) (*dagger.Container, error) {
-	version := "HEAD"
-	if ref != "" {
-		version = ref
+	if projectID == "" {
+		projectID = "manual"
+	}
+	if packageManager == "" {
+		packageManager = "pnpm"
+	}
+	if ref == "" {
+		ref = "HEAD"
 	}
 	source, err := createDirectory(ctx, repository, &ref, &path)
 	if err != nil {
@@ -79,25 +144,16 @@ func (m *Build) Build(
 	}
 
 	// Execute the build process.
-	command := []string{"pnpm", "run", "build"}
+	command := []string{packageManager, "run", "build"}
 	build, err := m.BuildEnv(source).
 		WithExec(command).
 		Sync(ctx)
 
 	var e *dagger.ExecError
 	if errors.As(err, &e) {
-		record := LogRecord{
-			Command:   strings.Join(command, " "),
-			Stdout:    e.Stdout,
-			Stderr:    e.Stderr,
-			ExitCode:  e.ExitCode,
-			Commit:    version,
-			ProjectID: "mwe47v732g3llus",
-			Timestamp: time.Now(),
-		}
 
 		// Push logs to the API
-		if err := createLogRecord(ctx, record); err != nil {
+		if logErr := createLogRecord(ctx, id, command, e.Stdout, e.Stderr, e.ExitCode, ref, projectID); logErr != nil {
 			return nil, fmt.Errorf("failed to create log record: %w", err)
 		}
 
@@ -112,19 +168,8 @@ func (m *Build) Build(
 		return nil, logErr
 	}
 
-	// Log record structure
-	record := LogRecord{
-		Command:   strings.Join(command, " "),
-		Stdout:    stdout,
-		Stderr:    stderr,
-		ExitCode:  exitCode,
-		Commit:    version,
-		ProjectID: "mwe47v732g3llus",
-		Timestamp: time.Now(),
-	}
-
 	// Push logs to the API
-	if err := createLogRecord(ctx, record); err != nil {
+	if logErr := createLogRecord(ctx, id, command, stdout, stderr, exitCode, ref, projectID); logErr != nil {
 		return nil, fmt.Errorf("failed to create log record: %w", err)
 	}
 
@@ -167,20 +212,36 @@ func fetchBuildLogs(ctx context.Context, build *dagger.Container) (string, strin
 	return stdout, stderr, exitCode, nil
 }
 
-func createLogRecord(ctx context.Context, record LogRecord) error {
+func createLogRecord(ctx context.Context, id string, command []string, stdout, stderr string, exitCode int, ref string, projectID string) error {
 	url := "http://host.docker.internal:8090"
+
+	record := LogRecord{
+		Command:   strings.Join(command, " "),
+		Stdout:    stdout,
+		Stderr:    stderr,
+		ExitCode:  exitCode,
+		Ref:       ref,
+		ProjectID: projectID,
+	}
 
 	client := &http.Client{}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("failed to marshal record: %w", err)
 	}
+	method := ""
+	if id == "" {
+		method = "POST"
+		url = url + "/api/collections/builds/records"
+	} else {
+		method = "PATCH"
+		url = url + "/api/collections/builds/records/" + id
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url+"/api/collections/logs/records", bytes.NewBuffer(data))
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(data))
 	if err != nil {
 		return fmt.Errorf("failed to create POST request: %w", err)
 	}
-
 	req.Header.Set("Content-Type", "application/json")
 	//req.Header.Set("Authorization", "TOKEN "+token)
 
@@ -198,45 +259,108 @@ func createLogRecord(ctx context.Context, record LogRecord) error {
 	return nil
 }
 
-/*
-	addr, err := start.Publish(ctx, fmt.Sprintf("ttl.sh/love-letter-%.0f", math.Floor(rand.Float64()*10000000)))
-	if err != nil {
-		return  err
+func (m *Build) BuildNginx(
+	ctx context.Context,
+	// +optional
+	id string,
+	repository string,
+	// +optional
+	ref string,
+	// +optional
+	path string,
+	// +optional
+	projectID string,
+	framework,
+	// +optional
+	packageManager string,
+	// +optional
+	ExposedPort *int,
+) (*dagger.Container, error) {
+	if ExposedPort == nil {
+		ExposedPort = new(int)
+		*ExposedPort = 80
 	}
-*/
-
-/*
-func (m *Build) BuildNginx(ctx context.Context, source *dagger.Directory) (*dagger.Container, error) {
-	build, err := m.BuildEnv(source).
-		WithExec([]string{"pnpm", "run", "wawa"}).
-		Directory("./dist").
-		Sync(ctx)
-
+	build, err := m.Build(ctx, id, repository, ref, path, projectID, packageManager)
 	if err != nil {
-		// unexpected error, could be network failure.
-		return nil, fmt.Errorf("run Build: %w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
+	if framework == "angular" {
+		BuildOutputPath, errPath := getAngularOutputPath(ctx, build)
+		if errPath != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+		return dag.Container().From("nginx:1.25-alpine").
+			WithDirectory("/usr/share/nginx/html", build.Directory(BuildOutputPath)).
+			WithExposedPort(*ExposedPort), nil
+	}
+
 	return dag.Container().From("nginx:1.25-alpine").
-		WithDirectory("/usr/share/nginx/html", build).
-		WithExposedPort(80), nil
+		WithDirectory("/usr/share/nginx/html", build.Directory(frameworkConfig[framework].BuildOutputPath)).
+		WithExposedPort(*ExposedPort), nil
 }
 
-
-func (m *Build) BuildNext(ctx context.Context, source *dagger.Directory) (*dagger.Container, error) {
-	buildContainer, err := m.Build(ctx, source)
-	if err != nil {
-		return nil, fmt.Errorf("error in build: %w", err)
+func (m *Build) BuildNext(
+	ctx context.Context,
+	// +optional
+	id string,
+	repository string,
+	// +optional
+	ref string,
+	// +optional
+	path string,
+	// +optional
+	projectID string,
+	framework,
+	// +optional
+	packageManager string,
+	// +optional
+	ExposedPort *int,
+) (*dagger.Container, error) {
+	if ExposedPort == nil {
+		ExposedPort = new(int)
+		*ExposedPort = 3000
 	}
 
-	container, err := buildContainer.
-		WithEntrypoint([]string{"pnpm", "run", "start"}).
-		WithExposedPort(3000).
+	build, err := m.Build(ctx, id, repository, ref, path, projectID, packageManager)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+
+	if packageManager == "" {
+		packageManager = "pnpm"
+	}
+	container, err := build.
+		WithEntrypoint([]string{packageManager, "run", "start"}).
+		WithExposedPort(*ExposedPort).
 		Sync(ctx)
 
 	if err != nil {
-		// unexpected error, could be network failure.
 		return nil, fmt.Errorf("run Build: %w", err)
 	}
 
 	return container, nil
-}*/
+}
+
+func getAngularOutputPath(ctx context.Context, build *dagger.Container) (string, error) {
+	file, err := build.Directory(".").File("/angular.json").Contents(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to read angular.json: %w", err)
+	}
+
+	// Decode into map[string]interface{}
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(file), &data); err != nil {
+		return "", fmt.Errorf("failed to decode angular.json: %w", err)
+	}
+	fmt.Println(file)
+	// Access the first project's outputPath
+	projects := data["projects"].(map[string]interface{})
+	for _, project := range projects {
+		architect := project.(map[string]interface{})["architect"].(map[string]interface{})
+		build := architect["build"].(map[string]interface{})
+		options := build["options"].(map[string]interface{})
+		return options["outputPath"].(string), nil
+	}
+
+	return "", fmt.Errorf("outputPath not found")
+}
