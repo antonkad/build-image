@@ -35,13 +35,12 @@ import (
 
 type Build struct{}
 type LogRecord struct {
-	ID        string `json:"id,omitempty"`
-	Command   string `json:"command,omitempty"`
-	Stdout    string `json:"stdout,omitempty"`
-	Stderr    string `json:"stderr,omitempty"`
-	ExitCode  int    `json:"exitCode,omitempty"`
-	Ref       string `json:"ref,omitempty"`
-	ProjectID string `json:"project,omitempty"`
+	Command  string `json:"command,omitempty"`
+	Stdout   string `json:"stdout,omitempty"`
+	Stderr   string `json:"stderr,omitempty"`
+	ExitCode int    `json:"exitCode,omitempty"`
+	Ref      string `json:"ref,omitempty"`
+	Project  string `json:"project,omitempty"`
 }
 
 var frameworkConfig = map[string]struct {
@@ -89,10 +88,6 @@ func (m *Build) Publish(
 	// +optional
 	ExposedPort *int,
 ) (string, error) {
-	if projectID == "" {
-		projectID = "manual"
-	}
-
 	var container *dagger.Container
 	var err error
 
@@ -129,9 +124,7 @@ func (m *Build) Build(
 	// +optional
 	packageManager string,
 ) (*dagger.Container, error) {
-	if projectID == "" {
-		projectID = "manual"
-	}
+
 	if packageManager == "" {
 		packageManager = "pnpm"
 	}
@@ -154,7 +147,7 @@ func (m *Build) Build(
 
 		// Push logs to the API
 		if logErr := createLogRecord(ctx, id, command, e.Stdout, e.Stderr, e.ExitCode, ref, projectID); logErr != nil {
-			return nil, fmt.Errorf("failed to create log record: %w", err)
+			return nil, fmt.Errorf("failed to create log record: %w", logErr)
 		}
 
 		return nil, err
@@ -170,7 +163,7 @@ func (m *Build) Build(
 
 	// Push logs to the API
 	if logErr := createLogRecord(ctx, id, command, stdout, stderr, exitCode, ref, projectID); logErr != nil {
-		return nil, fmt.Errorf("failed to create log record: %w", err)
+		return nil, fmt.Errorf("failed to create log record: %w", logErr)
 	}
 
 	return build, err
@@ -213,15 +206,19 @@ func fetchBuildLogs(ctx context.Context, build *dagger.Container) (string, strin
 }
 
 func createLogRecord(ctx context.Context, id string, command []string, stdout, stderr string, exitCode int, ref string, projectID string) error {
-	url := "http://host.docker.internal:8090"
+	url := "http://host.docker.internal:8090/api/collections/builds/records"
+
+	if projectID == "" {
+		projectID = "manual"
+	}
 
 	record := LogRecord{
-		Command:   strings.Join(command, " "),
-		Stdout:    stdout,
-		Stderr:    stderr,
-		ExitCode:  exitCode,
-		Ref:       ref,
-		ProjectID: projectID,
+		Command:  strings.Join(command, " "),
+		Stdout:   stdout,
+		Stderr:   stderr,
+		ExitCode: exitCode,
+		Ref:      ref,
+		Project:  projectID,
 	}
 
 	client := &http.Client{}
@@ -229,18 +226,17 @@ func createLogRecord(ctx context.Context, id string, command []string, stdout, s
 	if err != nil {
 		return fmt.Errorf("failed to marshal record: %w", err)
 	}
-	method := ""
-	if id == "" {
-		method = "POST"
-		url = url + "/api/collections/builds/records"
-	} else {
+	method := "POST"
+	if id != "" {
 		method = "PATCH"
-		url = url + "/api/collections/builds/records/" + id
+		url = fmt.Sprintf("%s/%s", url, id)
 	}
+
+	fmt.Println(method, url)
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(data))
 	if err != nil {
-		return fmt.Errorf("failed to create POST request: %w", err)
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	//req.Header.Set("Authorization", "TOKEN "+token)
