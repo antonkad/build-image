@@ -27,20 +27,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
-	"math/rand/v2"
 	"net/http"
 	"strings"
 )
 
 type Build struct{}
 type LogRecord struct {
-	Command  string `json:"command,omitempty"`
-	Stdout   string `json:"stdout,omitempty"`
-	Stderr   string `json:"stderr,omitempty"`
-	ExitCode int    `json:"exitCode,omitempty"`
-	Ref      string `json:"ref,omitempty"`
-	Project  string `json:"project,omitempty"`
+	Command  string `json:"command"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exitCode"`
+	Ref      string `json:"ref"`
+	Project  string `json:"project"`
 }
 
 var frameworkConfig = map[string]struct {
@@ -103,7 +101,7 @@ func (m *Build) Publish(
 	if err != nil {
 		return "", fmt.Errorf("error building %s: %w", framework, err)
 	}
-	addr, err := container.Publish(ctx, fmt.Sprintf("ttl.sh/%s-%.0f", projectID, math.Floor(rand.Float64()*10000000)))
+	addr, err := container.Publish(ctx, fmt.Sprintf("ttl.sh/%s:%s", projectID, ref))
 	if err != nil {
 		return "", err
 	}
@@ -199,6 +197,7 @@ func fetchBuildLogs(ctx context.Context, build *dagger.Container) (string, strin
 		return stdout, "", 0, fmt.Errorf("failed to fetch stderr: %w", err)
 	}
 	exitCode, err := build.ExitCode(ctx)
+
 	if err != nil {
 		return stdout, stderr, 0, fmt.Errorf("failed to fetch exit code: %w", err)
 	}
@@ -209,7 +208,7 @@ func createLogRecord(ctx context.Context, id string, command []string, stdout, s
 	url := "http://host.docker.internal:8090/api/collections/builds/records"
 
 	if projectID == "" {
-		projectID = "manual"
+		projectID = "vg784o07b9iitqi"
 	}
 
 	record := LogRecord{
@@ -231,8 +230,6 @@ func createLogRecord(ctx context.Context, id string, command []string, stdout, s
 		method = "PATCH"
 		url = fmt.Sprintf("%s/%s", url, id)
 	}
-
-	fmt.Println(method, url)
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(data))
 	if err != nil {
