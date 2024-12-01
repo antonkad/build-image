@@ -90,7 +90,7 @@ func (m *Build) Publish(
 	var err error
 
 	switch framework {
-	case "next":
+	case "nextjs":
 		container, err = m.BuildNext(ctx, id, repository, ref, path, projectID, framework, packageManager, ExposedPort)
 	case "react", "angular", "vue", "svelte":
 		container, err = m.BuildNginx(ctx, id, repository, ref, path, projectID, framework, packageManager, ExposedPort)
