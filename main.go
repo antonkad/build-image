@@ -29,6 +29,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"go.uber.org/zap"
 )
 
 type Build struct{}
@@ -145,7 +147,7 @@ func (m *Build) Build(
 
 		// Push logs to the API
 		if logErr := createLogRecord(ctx, id, command, e.Stdout, e.Stderr, e.ExitCode, ref, projectID); logErr != nil {
-			return nil, fmt.Errorf("failed to create log record: %w", logErr)
+			zap.L().Sugar().Errorf("failed to create log record: %w", logErr)
 		}
 
 		return nil, err
@@ -161,7 +163,7 @@ func (m *Build) Build(
 
 	// Push logs to the API
 	if logErr := createLogRecord(ctx, id, command, stdout, stderr, exitCode, ref, projectID); logErr != nil {
-		return nil, fmt.Errorf("failed to create log record: %w", logErr)
+		zap.L().Sugar().Errorf("failed to create log record: %w", logErr)
 	}
 
 	return build, err
@@ -240,7 +242,7 @@ func createLogRecord(ctx context.Context, id string, command []string, stdout, s
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("POST request failed: %w", err)
+		return fmt.Errorf("Request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
