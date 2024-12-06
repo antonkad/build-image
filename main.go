@@ -131,7 +131,7 @@ func (m *Build) Build(
 	if ref == "" {
 		ref = "HEAD"
 	}
-	source, err := createDirectory(ctx, repository, &ref, &path)
+	source, err := createDirectory(ctx, repository, &ref, &path, id, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("Error creating directory: %v", err)
 	}
@@ -169,16 +169,23 @@ func (m *Build) Build(
 	return build, err
 }
 
-func createDirectory(ctx context.Context, repository string, branch *string, path *string) (*dagger.Directory, error) {
-	// Create the Git repository reference
-
+func createDirectory(ctx context.Context, repository string, ref *string, path *string, buildID string, projectID string) (*dagger.Directory, error) {
 	var gitRepo *dagger.Directory
-	// Check if branch is provided and non-empty
-	if branch != nil && *branch != "" {
-		gitRepo = dag.Git(repository).Branch(*branch).Tree()
+	var gitErr error
+	if ref != nil && *ref != "" && !strings.EqualFold(*ref, "HEAD") {
+		gitRepo, gitErr = dag.Git(repository).Branch(*ref).Tree().Sync(ctx)
 	} else {
-		gitRepo = dag.Git(repository).Head().Tree()
+		gitRepo, gitErr = dag.Git(repository).Head().Tree().Sync(ctx)
 	}
+
+	if gitErr != nil {
+		// Push logs to the API
+		if logErr := createLogRecord(ctx, buildID, make([]string, 0), "", gitErr.Error(), 1, projectID, projectID); logErr != nil {
+			zap.L().Sugar().Errorf("failed to create log record: %w", logErr)
+		}
+		return nil, fmt.Errorf("failed to sync git tree: %w", gitErr)
+	}
+
 	// If a directory is specified, narrow down to that directory
 	if path != nil && *path != "" {
 		return gitRepo.Directory(*path), nil
