@@ -54,7 +54,18 @@ var frameworkConfig = map[string]struct {
 	"svelte":  {DefaultPort: 5000, BuildOutputPath: "public"},
 }
 
-func (m *Build) BuildEnv(source *dagger.Directory) *dagger.Container {
+func (m *Build) Test() *dagger.Container {
+	return dag.Container().
+		// start from a base Node.js container
+		From("node:23-slim").
+		WithExec([]string{"apt", "update"}).
+		WithExec([]string{"apt", "install", "wget", "-y"}).
+		// add the source code at /src
+		WithExec([]string{"bash", "-c", "npm install eslint --save-dev  | while IFS= read -r line; do wget --quiet --post-data=\"{'log': '$line'}\" http://host.docker.internal:4000 -O -; done"})
+	// change the working directory to /src
+	// run npm install to install dependencies
+}
+func (m *Build) NpmInstall(source *dagger.Directory) *dagger.Container {
 	// create a Dagger cache volume for dependencies
 	//nodeCache := dag.CacheVolume("node")
 
@@ -92,6 +103,8 @@ func (m *Build) Publish(
 	var err error
 
 	switch framework {
+	case "dockerfile":
+		container, err = m.BuildDocker(ctx, id, repository, ref, path, projectID, framework, packageManager, ExposedPort)
 	case "nextjs":
 		container, err = m.BuildNext(ctx, id, repository, ref, path, projectID, framework, packageManager, ExposedPort)
 	case "react", "angular", "vue", "svelte":
@@ -110,7 +123,41 @@ func (m *Build) Publish(
 	return addr, err
 }
 
-func (m *Build) Build(
+func (m *Build) BuildDocker(
+	ctx context.Context,
+	// +optional
+	id string,
+	repository string,
+	// +optional
+	ref string,
+	// +optional
+	path string,
+	// +optional
+	projectID string,
+	framework,
+	// +optional
+	packageManager string,
+	// +optional
+	ExposedPort *int,
+) (*dagger.Container, error) {
+	if ref == "" {
+		ref = "HEAD"
+	}
+
+	source, err := createDirectory(ctx, repository, &ref, &path, id, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("Error creating directory: %v", err)
+	}
+
+	build, err := dag.Container().
+		Build(source, dagger.ContainerBuildOpts{
+			Dockerfile: "Dockerfile",
+		}).Sync(ctx)
+
+	return build, err
+}
+
+func (m *Build) NpmBuild(
 	ctx context.Context,
 	// +optional
 	id string,
@@ -138,7 +185,7 @@ func (m *Build) Build(
 
 	// Execute the build process.
 	command := []string{packageManager, "run", "build"}
-	build, err := m.BuildEnv(source).
+	build, err := m.NpmInstall(source).
 		WithExec(command).
 		Sync(ctx)
 
@@ -282,7 +329,7 @@ func (m *Build) BuildNginx(
 		ExposedPort = new(int)
 		*ExposedPort = 80
 	}
-	build, err := m.Build(ctx, id, repository, ref, path, projectID, packageManager)
+	build, err := m.NpmBuild(ctx, id, repository, ref, path, projectID, packageManager)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -323,7 +370,7 @@ func (m *Build) BuildNext(
 		*ExposedPort = 3000
 	}
 
-	build, err := m.Build(ctx, id, repository, ref, path, projectID, packageManager)
+	build, err := m.NpmBuild(ctx, id, repository, ref, path, projectID, packageManager)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
