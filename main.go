@@ -20,28 +20,14 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"dagger/build/internal/dagger"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-
-	"go.uber.org/zap"
 )
 
 type Build struct{}
-type LogRecord struct {
-	Command  string `json:"command"`
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	ExitCode int    `json:"exitCode"`
-	Ref      string `json:"ref"`
-	Project  string `json:"project"`
-}
 
 var frameworkConfig = map[string]struct {
 	DefaultPort     int
@@ -65,34 +51,46 @@ func (m *Build) Test() *dagger.Container {
 	// change the working directory to /src
 	// run npm install to install dependencies
 }
-func (m *Build) NpmInstall(source *dagger.Directory) *dagger.Container {
+func (m *Build) NpmInstall(source *dagger.Directory, jobAttempt string, job string, packageManager string) *dagger.Container {
 	// create a Dagger cache volume for dependencies
 	//nodeCache := dag.CacheVolume("node")
+	stepName := "dependencies"
+	if packageManager == "" {
+		packageManager = "pnpm"
+	}
+
+	command := []string{packageManager, "install"}
 
 	return dag.Container().
 		// start from a base Node.js container
 		From("node:23-slim").
+		WithExec([]string{"sh", "-c", "apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*"}).
 		// add the source code at /src
 		WithDirectory("/src", source).
 		WithExec([]string{"npm", "install", "-g", "pnpm"}).
 		// change the working directory to /src
 		WithWorkdir("/src").
+		WithMountedCache("/root/.npm", dag.CacheVolume("node-21")).
+		//WithEnvVariable("CACHEBUSTER", time.Now().String()).
 		// run npm install to install dependencies
-		WithExec([]string{"pnpm", "install"})
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
+			"%s 2>&1 | while IFS= read -r line; do echo '{\"execution\":\"%s\",\"build\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
+			strings.Join(command, " "), jobAttempt, job, stepName,
+		)})
 
 }
 
 func (m *Build) Publish(
 	ctx context.Context,
 	// +optional
-	id string,
+	jobAttempt string,
 	repository string,
 	// +optional
 	ref string,
 	// +optional
 	path string,
 	// +optional
-	projectID string,
+	job string,
 	framework,
 	// +optional
 	packageManager string,
@@ -104,11 +102,11 @@ func (m *Build) Publish(
 
 	switch framework {
 	case "dockerfile":
-		container, err = m.BuildDocker(ctx, id, repository, ref, path, projectID, framework, packageManager, ExposedPort)
+		container, err = m.BuildDocker(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
 	case "nextjs":
-		container, err = m.BuildNext(ctx, id, repository, ref, path, projectID, framework, packageManager, ExposedPort)
+		container, err = m.BuildNext(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
 	case "react", "angular", "vue", "svelte":
-		container, err = m.BuildNginx(ctx, id, repository, ref, path, projectID, framework, packageManager, ExposedPort)
+		container, err = m.BuildNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
 	default:
 		return "", fmt.Errorf("unsupported framework: %s", framework)
 	}
@@ -116,7 +114,7 @@ func (m *Build) Publish(
 	if err != nil {
 		return "", fmt.Errorf("error building %s: %w", framework, err)
 	}
-	addr, err := container.Publish(ctx, fmt.Sprintf("ttl.sh/%s:%s", projectID, ref))
+	addr, err := container.Publish(ctx, fmt.Sprintf("ttl.sh/%s:%s", job, ref))
 	if err != nil {
 		return "", err
 	}
@@ -126,14 +124,14 @@ func (m *Build) Publish(
 func (m *Build) BuildDocker(
 	ctx context.Context,
 	// +optional
-	id string,
+	jobAttempt string,
 	repository string,
 	// +optional
 	ref string,
 	// +optional
 	path string,
 	// +optional
-	projectID string,
+	job string,
 	framework,
 	// +optional
 	packageManager string,
@@ -144,7 +142,7 @@ func (m *Build) BuildDocker(
 		ref = "HEAD"
 	}
 
-	source, err := createDirectory(ctx, repository, &ref, &path, id, projectID)
+	source, err := createDirectory(ctx, repository, &ref, &path, jobAttempt, job)
 	if err != nil {
 		return nil, fmt.Errorf("Error creating directory: %v", err)
 	}
@@ -160,17 +158,18 @@ func (m *Build) BuildDocker(
 func (m *Build) NpmBuild(
 	ctx context.Context,
 	// +optional
-	id string,
+	jobAttempt string,
 	repository string,
 	// +optional
 	ref string,
 	// +optional
 	path string,
 	// +optional
-	projectID string,
+	job string,
 	// +optional
 	packageManager string,
 ) (*dagger.Container, error) {
+	stepName := "build"
 
 	if packageManager == "" {
 		packageManager = "pnpm"
@@ -178,59 +177,29 @@ func (m *Build) NpmBuild(
 	if ref == "" {
 		ref = "HEAD"
 	}
-	source, err := createDirectory(ctx, repository, &ref, &path, id, projectID)
+	source, err := createDirectory(ctx, repository, &ref, &path, jobAttempt, job)
 	if err != nil {
 		return nil, fmt.Errorf("Error creating directory: %v", err)
 	}
 
 	// Execute the build process.
 	command := []string{packageManager, "run", "build"}
-	build, err := m.NpmInstall(source).
-		WithExec(command).
+	build, err := m.NpmInstall(source, jobAttempt, job, packageManager).
+		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
+			"%s 2>&1 | while IFS= read -r line; do echo \"$line\" | jq -c -R '{execution: \"%s\", build: \"%s\", step: \"%s\", message: .}'; done",
+			strings.Join(command, " "), jobAttempt, job, stepName,
+		)}).
 		Sync(ctx)
-
-	var e *dagger.ExecError
-	if errors.As(err, &e) {
-
-		// Push logs to the API
-		if logErr := createLogRecord(ctx, id, command, e.Stdout, e.Stderr, e.ExitCode, ref, projectID); logErr != nil {
-			zap.L().Sugar().Errorf("failed to create log record: %w", logErr)
-		}
-
-		return nil, err
-	} else if err != nil {
-		return nil, err
-	}
-
-	// Collect build output.
-	stdout, stderr, exitCode, logErr := fetchBuildLogs(ctx, build)
-	if logErr != nil {
-		return nil, logErr
-	}
-
-	// Push logs to the API
-	if logErr := createLogRecord(ctx, id, command, stdout, stderr, exitCode, ref, projectID); logErr != nil {
-		zap.L().Sugar().Errorf("failed to create log record: %w", logErr)
-	}
 
 	return build, err
 }
 
-func createDirectory(ctx context.Context, repository string, ref *string, path *string, buildID string, projectID string) (*dagger.Directory, error) {
+func createDirectory(ctx context.Context, repository string, ref *string, path *string, executionID string, job string) (*dagger.Directory, error) {
 	var gitRepo *dagger.Directory
-	var gitErr error
 	if ref != nil && *ref != "" && !strings.EqualFold(*ref, "HEAD") {
-		gitRepo, gitErr = dag.Git(repository).Branch(*ref).Tree().Sync(ctx)
+		gitRepo, _ = dag.Git(repository).Branch(*ref).Tree().Sync(ctx)
 	} else {
-		gitRepo, gitErr = dag.Git(repository).Head().Tree().Sync(ctx)
-	}
-
-	if gitErr != nil {
-		// Push logs to the API
-		if logErr := createLogRecord(ctx, buildID, make([]string, 0), "", gitErr.Error(), 1, projectID, projectID); logErr != nil {
-			zap.L().Sugar().Errorf("failed to create log record: %w", logErr)
-		}
-		return nil, fmt.Errorf("failed to sync git tree: %w", gitErr)
+		gitRepo, _ = dag.Git(repository).Head().Tree().Sync(ctx)
 	}
 
 	// If a directory is specified, narrow down to that directory
@@ -242,83 +211,17 @@ func createDirectory(ctx context.Context, repository string, ref *string, path *
 	return gitRepo.Directory("."), nil
 }
 
-// Helper to fetch build logs.
-func fetchBuildLogs(ctx context.Context, build *dagger.Container) (string, string, int, error) {
-	stdout, err := build.Stdout(ctx)
-	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to fetch stdout: %w", err)
-	}
-	stderr, err := build.Stderr(ctx)
-	if err != nil {
-		return stdout, "", 0, fmt.Errorf("failed to fetch stderr: %w", err)
-	}
-	exitCode, err := build.ExitCode(ctx)
-
-	if err != nil {
-		return stdout, stderr, 0, fmt.Errorf("failed to fetch exit code: %w", err)
-	}
-	return stdout, stderr, exitCode, nil
-}
-
-func createLogRecord(ctx context.Context, id string, command []string, stdout, stderr string, exitCode int, ref string, projectID string) error {
-	url := "http://host.docker.internal:8090/api/collections/builds/records"
-
-	if projectID == "" {
-		projectID = "vg784o07b9iitqi"
-	}
-
-	record := LogRecord{
-		Command:  strings.Join(command, " "),
-		Stdout:   stdout,
-		Stderr:   stderr,
-		ExitCode: exitCode,
-		Ref:      ref,
-		Project:  projectID,
-	}
-
-	client := &http.Client{}
-	data, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("failed to marshal record: %w", err)
-	}
-	method := "POST"
-	if id != "" {
-		method = "PATCH"
-		url = fmt.Sprintf("%s/%s", url, id)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(data))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	//req.Header.Set("Authorization", "TOKEN "+token)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("Request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("unexpected response: %s", string(body))
-	}
-
-	return nil
-}
-
 func (m *Build) BuildNginx(
 	ctx context.Context,
 	// +optional
-	id string,
+	jobAttempt string,
 	repository string,
 	// +optional
 	ref string,
 	// +optional
 	path string,
 	// +optional
-	projectID string,
+	job string,
 	framework,
 	// +optional
 	packageManager string,
@@ -329,7 +232,7 @@ func (m *Build) BuildNginx(
 		ExposedPort = new(int)
 		*ExposedPort = 80
 	}
-	build, err := m.NpmBuild(ctx, id, repository, ref, path, projectID, packageManager)
+	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -351,14 +254,14 @@ func (m *Build) BuildNginx(
 func (m *Build) BuildNext(
 	ctx context.Context,
 	// +optional
-	id string,
+	jobAttempt string,
 	repository string,
 	// +optional
 	ref string,
 	// +optional
 	path string,
 	// +optional
-	projectID string,
+	job string,
 	framework,
 	// +optional
 	packageManager string,
@@ -370,7 +273,7 @@ func (m *Build) BuildNext(
 		*ExposedPort = 3000
 	}
 
-	build, err := m.NpmBuild(ctx, id, repository, ref, path, projectID, packageManager)
+	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
