@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type Build struct{}
@@ -51,7 +52,7 @@ func (m *Build) Test() *dagger.Container {
 	// change the working directory to /src
 	// run npm install to install dependencies
 }
-func (m *Build) NpmInstall(source *dagger.Directory, jobAttempt string, job string, packageManager string) *dagger.Container {
+func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAttempt string, job string, packageManager string) *dagger.Container {
 	// create a Dagger cache volume for dependencies
 	//nodeCache := dag.CacheVolume("node")
 	stepName := "dependencies"
@@ -61,7 +62,7 @@ func (m *Build) NpmInstall(source *dagger.Directory, jobAttempt string, job stri
 
 	command := []string{packageManager, "install"}
 
-	return dag.Container().
+	install, _ := dag.Container().
 		// start from a base Node.js container
 		From("node:23-slim").
 		WithExec([]string{"sh", "-c", "apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*"}).
@@ -71,12 +72,14 @@ func (m *Build) NpmInstall(source *dagger.Directory, jobAttempt string, job stri
 		// change the working directory to /src
 		WithWorkdir("/src").
 		WithMountedCache("/root/.npm", dag.CacheVolume("node-21")).
-		//WithEnvVariable("CACHEBUSTER", time.Now().String()).
-		// run npm install to install dependencies
+		WithEnvVariable("CACHEBUSTER", time.Now().String()).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			"%s 2>&1 | while IFS= read -r line; do echo '{\"execution\":\"%s\",\"build\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
+			"%s 2>&1 | while IFS= read -r line; do echo '{\"jobAttempt\":\"%s\",\"job\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
 			strings.Join(command, " "), jobAttempt, job, stepName,
-		)})
+		)}).
+		Sync(ctx)
+
+	return install
 
 }
 
@@ -184,9 +187,9 @@ func (m *Build) NpmBuild(
 
 	// Execute the build process.
 	command := []string{packageManager, "run", "build"}
-	build, err := m.NpmInstall(source, jobAttempt, job, packageManager).
+	build, err := m.NpmInstall(ctx, source, jobAttempt, job, packageManager).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			"%s 2>&1 | while IFS= read -r line; do echo \"$line\" | jq -c -R '{execution: \"%s\", build: \"%s\", step: \"%s\", message: .}'; done",
+			"%s 2>&1 | while IFS= read -r line; do echo \"$line\" | jq -c -R '{jobAttempt: \"%s\", job: \"%s\", step: \"%s\", message: .}'; done",
 			strings.Join(command, " "), jobAttempt, job, stepName,
 		)}).
 		Sync(ctx)
@@ -246,8 +249,13 @@ func (m *Build) BuildNginx(
 			WithExposedPort(*ExposedPort), nil
 	}
 
+	outputPath := frameworkConfig[framework].BuildOutputPath
+	if _, err := build.Directory(outputPath).Entries(ctx); err != nil {
+		return nil, fmt.Errorf("expected output directory %q not found for framework %q — check your project's framework setting", outputPath, framework)
+	}
+
 	return dag.Container().From("nginx:1.25-alpine").
-		WithDirectory("/usr/share/nginx/html", build.Directory(frameworkConfig[framework].BuildOutputPath)).
+		WithDirectory("/usr/share/nginx/html", build.Directory(outputPath)).
 		WithExposedPort(*ExposedPort), nil
 }
 
@@ -276,6 +284,10 @@ func (m *Build) BuildNext(
 	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
+	}
+
+	if _, err := build.Directory(".next").Entries(ctx); err != nil {
+		return nil, fmt.Errorf("expected .next directory not found — check your project's framework setting (currently %q)", framework)
 	}
 
 	if packageManager == "" {
