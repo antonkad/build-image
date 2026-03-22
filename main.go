@@ -22,7 +22,7 @@ package main
 import (
 	"context"
 	"dagger/build/internal/dagger"
-	telemetry "dagger/build/internal/telemetry"
+	telemetry "github.com/dagger/otel-go"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -92,7 +92,7 @@ func (m *Build) Publish(
 	path string,
 	// +optional
 	job string,
-	framework,
+	framework string,
 	// +optional
 	packageManager string,
 	// +optional
@@ -136,7 +136,7 @@ func (m *Build) BuildDocker(
 	path string,
 	// +optional
 	job string,
-	framework,
+	framework string,
 	// +optional
 	packageManager string,
 	// +optional
@@ -151,8 +151,8 @@ func (m *Build) BuildDocker(
 		return nil, fmt.Errorf("Error creating directory: %v", err)
 	}
 
-	build, err := dag.Container().
-		Build(source, dagger.ContainerBuildOpts{
+	build, err := source.
+		DockerBuild(dagger.DirectoryDockerBuildOpts{
 			Dockerfile: "Dockerfile",
 		}).Sync(ctx)
 
@@ -206,10 +206,14 @@ func createDirectory(ctx context.Context, repository string, ref *string, path *
 	defer telemetry.End(span, func() error { return rerr })
 
 	var gitRepo *dagger.Directory
+	var err error
 	if ref != nil && *ref != "" && !strings.EqualFold(*ref, "HEAD") {
-		gitRepo, _ = dag.Git(repository).Branch(*ref).Tree().Sync(ctx)
+		gitRepo, err = dag.Git(repository).Branch(*ref).Tree().Sync(ctx)
 	} else {
-		gitRepo, _ = dag.Git(repository).Head().Tree().Sync(ctx)
+		gitRepo, err = dag.Git(repository).Head().Tree().Sync(ctx)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("git clone failed: %w", err)
 	}
 
 	// If a directory is specified, narrow down to that directory
@@ -232,7 +236,7 @@ func (m *Build) BuildNginx(
 	path string,
 	// +optional
 	job string,
-	framework,
+	framework string,
 	// +optional
 	packageManager string,
 	// +optional
@@ -277,7 +281,7 @@ func (m *Build) BuildNext(
 	path string,
 	// +optional
 	job string,
-	framework,
+	framework string,
 	// +optional
 	packageManager string,
 	// +optional
