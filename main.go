@@ -22,6 +22,7 @@ package main
 import (
 	"context"
 	"dagger/build/internal/dagger"
+	telemetry "dagger/build/internal/telemetry"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -53,8 +54,9 @@ func (m *Build) Test() *dagger.Container {
 	// run npm install to install dependencies
 }
 func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAttempt string, job string, packageManager string) *dagger.Container {
-	// create a Dagger cache volume for dependencies
-	//nodeCache := dag.CacheVolume("node")
+	ctx, span := Tracer().Start(ctx, "dependencies")
+	defer span.End()
+
 	stepName := "dependencies"
 	if packageManager == "" {
 		packageManager = "pnpm"
@@ -63,13 +65,10 @@ func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAtt
 	command := []string{packageManager, "install"}
 
 	install, _ := dag.Container().
-		// start from a base Node.js container
 		From("node:23-slim").
 		WithExec([]string{"sh", "-c", "apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*"}).
-		// add the source code at /src
 		WithDirectory("/src", source).
 		WithExec([]string{"npm", "install", "-g", "pnpm"}).
-		// change the working directory to /src
 		WithWorkdir("/src").
 		WithMountedCache("/root/.npm", dag.CacheVolume("node-21")).
 		WithEnvVariable("CACHEBUSTER", time.Now().String()).
@@ -80,7 +79,6 @@ func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAtt
 		Sync(ctx)
 
 	return install
-
 }
 
 func (m *Build) Publish(
@@ -99,7 +97,10 @@ func (m *Build) Publish(
 	packageManager string,
 	// +optional
 	ExposedPort *int,
-) (string, error) {
+) (_ string, rerr error) {
+	ctx, span := Tracer().Start(ctx, "publish")
+	defer telemetry.End(span, func() error { return rerr })
+
 	var container *dagger.Container
 	var err error
 
@@ -171,7 +172,10 @@ func (m *Build) NpmBuild(
 	job string,
 	// +optional
 	packageManager string,
-) (*dagger.Container, error) {
+) (_ *dagger.Container, rerr error) {
+	ctx, span := Tracer().Start(ctx, "build")
+	defer telemetry.End(span, func() error { return rerr })
+
 	stepName := "build"
 
 	if packageManager == "" {
@@ -197,7 +201,10 @@ func (m *Build) NpmBuild(
 	return build, err
 }
 
-func createDirectory(ctx context.Context, repository string, ref *string, path *string, executionID string, job string) (*dagger.Directory, error) {
+func createDirectory(ctx context.Context, repository string, ref *string, path *string, executionID string, job string) (_ *dagger.Directory, rerr error) {
+	ctx, span := Tracer().Start(ctx, "git")
+	defer telemetry.End(span, func() error { return rerr })
+
 	var gitRepo *dagger.Directory
 	if ref != nil && *ref != "" && !strings.EqualFold(*ref, "HEAD") {
 		gitRepo, _ = dag.Git(repository).Branch(*ref).Tree().Sync(ctx)
