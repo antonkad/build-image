@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Build struct{}
@@ -55,6 +57,7 @@ func (m *Build) Test() *dagger.Container {
 }
 func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAttempt string, job string, packageManager string) *dagger.Container {
 	ctx, span := Tracer().Start(ctx, "dependencies")
+	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer span.End()
 
 	stepName := "dependencies"
@@ -99,6 +102,7 @@ func (m *Build) Publish(
 	ExposedPort *int,
 ) (_ string, rerr error) {
 	ctx, span := Tracer().Start(ctx, "publish")
+	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer telemetry.End(span, func() error { return rerr })
 
 	var container *dagger.Container
@@ -174,6 +178,7 @@ func (m *Build) NpmBuild(
 	packageManager string,
 ) (_ *dagger.Container, rerr error) {
 	ctx, span := Tracer().Start(ctx, "build")
+	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer telemetry.End(span, func() error { return rerr })
 
 	stepName := "build"
@@ -203,6 +208,7 @@ func (m *Build) NpmBuild(
 
 func createDirectory(ctx context.Context, repository string, ref *string, path *string, executionID string, job string) (_ *dagger.Directory, rerr error) {
 	ctx, span := Tracer().Start(ctx, "git")
+	span.SetAttributes(attribute.String("kad.jobAttempt", executionID))
 	defer telemetry.End(span, func() error { return rerr })
 
 	var gitRepo *dagger.Directory
