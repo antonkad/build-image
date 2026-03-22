@@ -101,10 +101,6 @@ func (m *Build) Publish(
 	// +optional
 	ExposedPort *int,
 ) (_ string, rerr error) {
-	ctx, span := Tracer().Start(ctx, "publish")
-	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
-	defer telemetry.End(span, func() error { return rerr })
-
 	var container *dagger.Container
 	var err error
 
@@ -122,6 +118,12 @@ func (m *Build) Publish(
 	if err != nil {
 		return "", fmt.Errorf("error building %s: %w", framework, err)
 	}
+
+	// "publish" span only covers the container publish to registry
+	ctx, span := Tracer().Start(ctx, "publish")
+	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
+	defer telemetry.End(span, func() error { return rerr })
+
 	addr, err := container.Publish(ctx, fmt.Sprintf("ttl.sh/%s:%s", job, ref))
 	if err != nil {
 		return "", err
@@ -177,10 +179,6 @@ func (m *Build) NpmBuild(
 	// +optional
 	packageManager string,
 ) (_ *dagger.Container, rerr error) {
-	ctx, span := Tracer().Start(ctx, "build")
-	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
-	defer telemetry.End(span, func() error { return rerr })
-
 	stepName := "build"
 
 	if packageManager == "" {
@@ -194,9 +192,15 @@ func (m *Build) NpmBuild(
 		return nil, fmt.Errorf("Error creating directory: %v", err)
 	}
 
-	// Execute the build process.
+	installed := m.NpmInstall(ctx, source, jobAttempt, job, packageManager)
+
+	// "build" span only covers the actual npm run build
+	ctx, span := Tracer().Start(ctx, "build")
+	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
+	defer telemetry.End(span, func() error { return rerr })
+
 	command := []string{packageManager, "run", "build"}
-	build, err := m.NpmInstall(ctx, source, jobAttempt, job, packageManager).
+	build, err := installed.
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
 			"%s 2>&1 | while IFS= read -r line; do echo \"$line\" | jq -c -R '{jobAttempt: \"%s\", job: \"%s\", step: \"%s\", message: .}'; done",
 			strings.Join(command, " "), jobAttempt, job, stepName,
