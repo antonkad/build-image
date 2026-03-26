@@ -100,6 +100,8 @@ func (m *Build) Publish(
 	packageManager string,
 	// +optional
 	ExposedPort *int,
+	// Image name for the registry (e.g. project ID)
+	imageName string,
 	// Registry URL (e.g. 192.168.1.150:30082)
 	registryUrl string,
 	// Registry username
@@ -130,7 +132,7 @@ func (m *Build) Publish(
 	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer telemetry.End(span, func() error { return rerr })
 
-	imageRef := fmt.Sprintf("%s/%s:%s", registryUrl, job, ref)
+	imageRef := fmt.Sprintf("%s/%s:%s", registryUrl, imageName, ref)
 	addr, err := container.
 		WithRegistryAuth(registryUrl, registryUser, registryPassword).
 		Publish(ctx, imageRef)
