@@ -100,6 +100,12 @@ func (m *Build) Publish(
 	packageManager string,
 	// +optional
 	ExposedPort *int,
+	// Registry URL (e.g. 192.168.1.150:30082)
+	registryUrl string,
+	// Registry username
+	registryUser string,
+	// Registry password
+	registryPassword *dagger.Secret,
 ) (_ string, rerr error) {
 	var container *dagger.Container
 	var err error
@@ -124,7 +130,10 @@ func (m *Build) Publish(
 	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer telemetry.End(span, func() error { return rerr })
 
-	addr, err := container.Publish(ctx, fmt.Sprintf("ttl.sh/%s:%s", job, ref))
+	imageRef := fmt.Sprintf("%s/%s:%s", registryUrl, job, ref)
+	addr, err := container.
+		WithRegistryAuth(registryUrl, registryUser, registryPassword).
+		Publish(ctx, imageRef)
 	if err != nil {
 		return "", err
 	}
