@@ -102,6 +102,8 @@ func (m *Build) Publish(
 	ExposedPort *int,
 	// Image name for the registry (e.g. project ID)
 	imageName string,
+	// Commit hash used as the image tag
+	commitHash string,
 	// Registry URL (e.g. 192.168.1.150:30082)
 	registryUrl string,
 	// Registry username
@@ -132,7 +134,12 @@ func (m *Build) Publish(
 	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer telemetry.End(span, func() error { return rerr })
 
-	imageRef := fmt.Sprintf("%s/%s:%s", registryUrl, imageName, ref)
+	// Use short commit hash as tag for unique, addressable images
+	imageTag := commitHash
+	if len(imageTag) > 7 {
+		imageTag = imageTag[:7]
+	}
+	imageRef := fmt.Sprintf("%s/%s:%s", registryUrl, imageName, imageTag)
 	addr, err := container.
 		WithRegistryAuth(registryUrl, registryUser, registryPassword).
 		Publish(ctx, imageRef)
