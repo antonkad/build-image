@@ -44,7 +44,7 @@ func init() {
 	}
 }
 
-func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAttempt string, job string, packageManager string) *dagger.Container {
+func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAttempt string, job string, packageManager string, dependenciesCmd string) *dagger.Container {
 	ctx, span := Tracer().Start(ctx, "dependencies")
 	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer span.End()
@@ -54,7 +54,13 @@ func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAtt
 		packageManager = "pnpm"
 	}
 
-	command := []string{packageManager, "install"}
+	// Use custom install command if provided, otherwise default to "<packageManager> install"
+	var commandStr string
+	if dependenciesCmd != "" {
+		commandStr = dependenciesCmd
+	} else {
+		commandStr = strings.Join([]string{packageManager, "install"}, " ")
+	}
 
 	install, _ := dag.Container().
 		From("node:23-slim").
@@ -66,7 +72,7 @@ func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAtt
 		WithEnvVariable("CACHEBUSTER", time.Now().String()).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
 			"%s 2>&1 | while IFS= read -r line; do echo '{\"jobAttempt\":\"%s\",\"job\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
-			strings.Join(command, " "), jobAttempt, job, stepName,
+			commandStr, jobAttempt, job, stepName,
 		)}).
 		Sync(ctx)
 
@@ -86,6 +92,10 @@ func (m *Build) NpmBuild(
 	job string,
 	// +optional
 	packageManager string,
+	// +optional
+	dependenciesCmd string,
+	// +optional
+	buildCmd string,
 ) (_ *dagger.Container, rerr error) {
 	stepName := "build"
 
@@ -100,18 +110,25 @@ func (m *Build) NpmBuild(
 		return nil, fmt.Errorf("Error creating directory: %v", err)
 	}
 
-	installed := m.NpmInstall(ctx, source, jobAttempt, job, packageManager)
+	installed := m.NpmInstall(ctx, source, jobAttempt, job, packageManager, dependenciesCmd)
 
-	// "build" span only covers the actual npm run build
+	// "build" span only covers the actual build command
 	ctx, span := Tracer().Start(ctx, "build")
 	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer telemetry.End(span, func() error { return rerr })
 
-	command := []string{packageManager, "run", "build"}
+	// Use custom build command if provided, otherwise default to "<packageManager> run build"
+	var commandStr string
+	if buildCmd != "" {
+		commandStr = buildCmd
+	} else {
+		commandStr = strings.Join([]string{packageManager, "run", "build"}, " ")
+	}
+
 	build, err := installed.
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
 			"%s 2>&1 | while IFS= read -r line; do echo \"$line\" | jq -c -R '{jobAttempt: \"%s\", job: \"%s\", step: \"%s\", message: .}'; done",
-			strings.Join(command, " "), jobAttempt, job, stepName,
+			commandStr, jobAttempt, job, stepName,
 		)}).
 		Sync(ctx)
 
@@ -135,6 +152,10 @@ func (m *Build) BuildStaticNginx(
 	// +optional
 	packageManager string,
 	// +optional
+	dependenciesCmd string,
+	// +optional
+	buildCmd string,
+	// +optional
 	exposedPort *int,
 ) (*dagger.Container, error) {
 	cfg := frameworks[framework]
@@ -143,7 +164,7 @@ func (m *Build) BuildStaticNginx(
 		*exposedPort = cfg.DefaultPort
 	}
 
-	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager)
+	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager, dependenciesCmd, buildCmd)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -186,6 +207,10 @@ func (m *Build) BuildNodeServer(
 	// +optional
 	packageManager string,
 	// +optional
+	dependenciesCmd string,
+	// +optional
+	buildCmd string,
+	// +optional
 	exposedPort *int,
 ) (*dagger.Container, error) {
 	cfg := frameworks[framework]
@@ -194,7 +219,7 @@ func (m *Build) BuildNodeServer(
 		*exposedPort = cfg.DefaultPort
 	}
 
-	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager)
+	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager, dependenciesCmd, buildCmd)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
