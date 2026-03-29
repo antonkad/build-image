@@ -88,6 +88,8 @@ func (m *Build) Publish(
 			container, err = m.BuildStaticNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
 		case "node-server":
 			container, err = m.BuildNodeServer(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
+		case "go-binary":
+			container, err = m.BuildGoBinary(ctx, jobAttempt, repository, ref, path, job, framework, ExposedPort)
 		default:
 			return "", fmt.Errorf("unsupported builder %q for framework %q", cfg.Builder, framework)
 		}
