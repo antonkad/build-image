@@ -61,6 +61,12 @@ func (m *Build) Publish(
 	// +optional
 	packageManager string,
 	// +optional
+	// Override the default install command (e.g. "npm ci --legacy-peer-deps")
+	dependenciesCmd string,
+	// +optional
+	// Override the default build command (e.g. "npm run build:prod")
+	buildCmd string,
+	// +optional
 	ExposedPort *int,
 	// Image name for the registry (e.g. project ID)
 	imageName string,
@@ -85,11 +91,11 @@ func (m *Build) Publish(
 		}
 		switch cfg.Builder {
 		case "static-nginx":
-			container, err = m.BuildStaticNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
+			container, err = m.BuildStaticNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, ExposedPort)
 		case "node-server":
-			container, err = m.BuildNodeServer(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
+			container, err = m.BuildNodeServer(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, ExposedPort)
 		case "go-binary":
-			container, err = m.BuildGoBinary(ctx, jobAttempt, repository, ref, path, job, framework, ExposedPort)
+			container, err = m.BuildGoBinary(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, ExposedPort)
 		default:
 			return "", fmt.Errorf("unsupported builder %q for framework %q", cfg.Builder, framework)
 		}

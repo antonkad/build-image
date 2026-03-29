@@ -35,6 +35,12 @@ func (m *Build) BuildGoBinary(
 	job string,
 	framework string,
 	// +optional
+	// Override the default install command (e.g. "go mod tidy && go mod download")
+	dependenciesCmd string,
+	// +optional
+	// Override the default build command (e.g. "go build -o /app ./cmd/server")
+	buildCmd string,
+	// +optional
 	exposedPort *int,
 ) (_ *dagger.Container, rerr error) {
 	cfg := frameworks[framework]
@@ -53,6 +59,11 @@ func (m *Build) BuildGoBinary(
 	}
 
 	// Dependencies step
+	depCmd := "go mod download"
+	if dependenciesCmd != "" {
+		depCmd = dependenciesCmd
+	}
+
 	ctx, depSpan := Tracer().Start(ctx, "dependencies")
 	depSpan.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 
@@ -63,17 +74,22 @@ func (m *Build) BuildGoBinary(
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod")).
 		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build")).
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			`go mod download 2>&1 | while IFS= read -r line; do echo '{"jobAttempt":"%s","job":"%s","step":"dependencies","message":"'"$line"'"}'; done`,
-			jobAttempt, job,
+			`%s 2>&1 | while IFS= read -r line; do echo '{"jobAttempt":"%s","job":"%s","step":"dependencies","message":"'"$line"'"}'; done`,
+			depCmd, jobAttempt, job,
 		)})
 
 	builder, err = builder.Sync(ctx)
 	depSpan.End()
 	if err != nil {
-		return nil, fmt.Errorf("go mod download failed: %w", err)
+		return nil, fmt.Errorf("dependencies failed: %w", err)
 	}
 
 	// Build step
+	bCmd := "go build -o /app ."
+	if buildCmd != "" {
+		bCmd = buildCmd
+	}
+
 	ctx, buildSpan := Tracer().Start(ctx, "build")
 	buildSpan.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer telemetry.End(buildSpan, func() error { return rerr })
@@ -81,8 +97,8 @@ func (m *Build) BuildGoBinary(
 	builder, err = builder.
 		WithEnvVariable("CGO_ENABLED", "0").
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			`go build -o /app . 2>&1 | while IFS= read -r line; do echo '{"jobAttempt":"%s","job":"%s","step":"build","message":"'"$line"'"}'; done`,
-			jobAttempt, job,
+			`%s 2>&1 | while IFS= read -r line; do echo '{"jobAttempt":"%s","job":"%s","step":"build","message":"'"$line"'"}'; done`,
+			bCmd, jobAttempt, job,
 		)}).
 		Sync(ctx)
 	if err != nil {
