@@ -1,87 +1,49 @@
-// A generated module for Build functions
+// Multi-language build pipeline for kad.dev
 //
-// This module has been generated via dagger init and serves as a reference to
-// basic module structure as you get started with Dagger.
-//
-// Two functions have been pre-created. You can modify, delete, or add to them,
-// as needed. They demonstrate usage of arguments and return types using simple
-// echo and grep commands. The functions can be called from the dagger CLI or
-// from one of the SDKs.
-//
-// The first line in this comment block is a short description line and the
-// rest is a long description with more detail on the module's purpose or usage,
-// if appropriate. All modules should have a short description.
-
-/*debugInfo := fmt.Sprintf(
-	"Command: %s\nExit Code: %d\nStdout: %s\nStderr: %s\n",
-	"Cmd", exitCode, stdout, stderr,
-)*/
+// Builds container images from Git repositories. Each language ecosystem
+// (JS, Go, Python, Rust) lives in its own file and registers framework
+// configs via init(). Publish() routes to the right builder based on
+// the framework's Builder field.
 
 package main
 
 import (
 	"context"
 	"dagger/build/internal/dagger"
-	telemetry "github.com/dagger/otel-go"
-	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	telemetry "github.com/dagger/otel-go"
 	"go.opentelemetry.io/otel/attribute"
 )
 
 type Build struct{}
 
-var frameworkConfig = map[string]struct {
-	DefaultPort     int
-	BuildOutputPath string
-}{
-	"next":    {DefaultPort: 3000, BuildOutputPath: ".next"},
-	"react":   {DefaultPort: 3000, BuildOutputPath: "build"},
-	"angular": {DefaultPort: 4200, BuildOutputPath: "dist/<project-name>"},
-	"vue":     {DefaultPort: 8080, BuildOutputPath: "dist"},
-	"svelte":  {DefaultPort: 5000, BuildOutputPath: "public"},
+// FrameworkConfig defines how to build and run a framework.
+// Each language file registers its frameworks into the global map via init().
+type FrameworkConfig struct {
+	// Builder strategy: "static-nginx", "node-server", "go-binary", "python-server", "rust-binary"
+	Builder string
+
+	// Build phase
+	BaseImage       string // build stage image (e.g. "node:23-slim", "golang:1.24-alpine")
+	RuntimeImage    string // runtime stage image for multi-stage builds (e.g. "gcr.io/distroless/static")
+	BuildOutputPath string // where build output lands (e.g. "dist", ".next", "build")
+
+	// Runtime phase
+	StartCmd    []string // entrypoint command (e.g. ["pnpm", "run", "start"])
+	DefaultPort int      // default exposed port
 }
+
+// frameworks is the unified config map. Each language file adds entries via init().
+var frameworks = map[string]FrameworkConfig{}
 
 func (m *Build) Test() *dagger.Container {
 	return dag.Container().
-		// start from a base Node.js container
 		From("node:23-slim").
 		WithExec([]string{"apt", "update"}).
 		WithExec([]string{"apt", "install", "wget", "-y"}).
-		// add the source code at /src
 		WithExec([]string{"bash", "-c", "npm install eslint --save-dev  | while IFS= read -r line; do wget --quiet --post-data=\"{'log': '$line'}\" http://host.docker.internal:4000 -O -; done"})
-	// change the working directory to /src
-	// run npm install to install dependencies
-}
-func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAttempt string, job string, packageManager string) *dagger.Container {
-	ctx, span := Tracer().Start(ctx, "dependencies")
-	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
-	defer span.End()
-
-	stepName := "dependencies"
-	if packageManager == "" {
-		packageManager = "pnpm"
-	}
-
-	command := []string{packageManager, "install"}
-
-	install, _ := dag.Container().
-		From("node:23-slim").
-		WithExec([]string{"sh", "-c", "apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*"}).
-		WithDirectory("/src", source).
-		WithExec([]string{"npm", "install", "-g", "pnpm"}).
-		WithWorkdir("/src").
-		WithMountedCache("/root/.npm", dag.CacheVolume("node-21")).
-		WithEnvVariable("CACHEBUSTER", time.Now().String()).
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			"%s 2>&1 | while IFS= read -r line; do echo '{\"jobAttempt\":\"%s\",\"job\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
-			strings.Join(command, " "), jobAttempt, job, stepName,
-		)}).
-		Sync(ctx)
-
-	return install
 }
 
 func (m *Build) Publish(
@@ -114,15 +76,21 @@ func (m *Build) Publish(
 	var container *dagger.Container
 	var err error
 
-	switch framework {
-	case "dockerfile":
-		container, err = m.BuildDocker(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
-	case "nextjs":
-		container, err = m.BuildNext(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
-	case "react", "angular", "vue", "svelte":
-		container, err = m.BuildNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
-	default:
-		return "", fmt.Errorf("unsupported framework: %s", framework)
+	if framework == "dockerfile" {
+		container, err = m.BuildDocker(ctx, jobAttempt, repository, ref, path, job)
+	} else {
+		cfg, ok := frameworks[framework]
+		if !ok {
+			return "", fmt.Errorf("unsupported framework: %s", framework)
+		}
+		switch cfg.Builder {
+		case "static-nginx":
+			container, err = m.BuildStaticNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
+		case "node-server":
+			container, err = m.BuildNodeServer(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, ExposedPort)
+		default:
+			return "", fmt.Errorf("unsupported builder %q for framework %q", cfg.Builder, framework)
+		}
 	}
 
 	if err != nil {
@@ -151,20 +119,11 @@ func (m *Build) Publish(
 
 func (m *Build) BuildDocker(
 	ctx context.Context,
-	// +optional
 	jobAttempt string,
 	repository string,
-	// +optional
 	ref string,
-	// +optional
 	path string,
-	// +optional
 	job string,
-	framework string,
-	// +optional
-	packageManager string,
-	// +optional
-	ExposedPort *int,
 ) (*dagger.Container, error) {
 	if ref == "" {
 		ref = "HEAD"
@@ -179,51 +138,6 @@ func (m *Build) BuildDocker(
 		DockerBuild(dagger.DirectoryDockerBuildOpts{
 			Dockerfile: "Dockerfile",
 		}).Sync(ctx)
-
-	return build, err
-}
-
-func (m *Build) NpmBuild(
-	ctx context.Context,
-	// +optional
-	jobAttempt string,
-	repository string,
-	// +optional
-	ref string,
-	// +optional
-	path string,
-	// +optional
-	job string,
-	// +optional
-	packageManager string,
-) (_ *dagger.Container, rerr error) {
-	stepName := "build"
-
-	if packageManager == "" {
-		packageManager = "pnpm"
-	}
-	if ref == "" {
-		ref = "HEAD"
-	}
-	source, err := createDirectory(ctx, repository, &ref, &path, jobAttempt, job)
-	if err != nil {
-		return nil, fmt.Errorf("Error creating directory: %v", err)
-	}
-
-	installed := m.NpmInstall(ctx, source, jobAttempt, job, packageManager)
-
-	// "build" span only covers the actual npm run build
-	ctx, span := Tracer().Start(ctx, "build")
-	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
-	defer telemetry.End(span, func() error { return rerr })
-
-	command := []string{packageManager, "run", "build"}
-	build, err := installed.
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			"%s 2>&1 | while IFS= read -r line; do echo \"$line\" | jq -c -R '{jobAttempt: \"%s\", job: \"%s\", step: \"%s\", message: .}'; done",
-			strings.Join(command, " "), jobAttempt, job, stepName,
-		)}).
-		Sync(ctx)
 
 	return build, err
 }
@@ -244,126 +158,9 @@ func createDirectory(ctx context.Context, repository string, ref *string, path *
 		return nil, fmt.Errorf("git clone failed: %w", err)
 	}
 
-	// If a directory is specified, narrow down to that directory
 	if path != nil && *path != "" {
 		return gitRepo.Directory(*path), nil
 	}
 
-	// Return the root of the repository if no directory is specified
 	return gitRepo.Directory("."), nil
-}
-
-func (m *Build) BuildNginx(
-	ctx context.Context,
-	// +optional
-	jobAttempt string,
-	repository string,
-	// +optional
-	ref string,
-	// +optional
-	path string,
-	// +optional
-	job string,
-	framework string,
-	// +optional
-	packageManager string,
-	// +optional
-	ExposedPort *int,
-) (*dagger.Container, error) {
-	if ExposedPort == nil {
-		ExposedPort = new(int)
-		*ExposedPort = 80
-	}
-	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-	if framework == "angular" {
-		BuildOutputPath, errPath := getAngularOutputPath(ctx, build)
-		if errPath != nil {
-			return nil, fmt.Errorf("%w", err)
-		}
-		return dag.Container().From("nginx:1.25-alpine").
-			WithDirectory("/usr/share/nginx/html", build.Directory(BuildOutputPath)).
-			WithExposedPort(*ExposedPort), nil
-	}
-
-	outputPath := frameworkConfig[framework].BuildOutputPath
-	if _, err := build.Directory(outputPath).Entries(ctx); err != nil {
-		return nil, fmt.Errorf("expected output directory %q not found for framework %q — check your project's framework setting", outputPath, framework)
-	}
-
-	return dag.Container().From("nginx:1.25-alpine").
-		WithDirectory("/usr/share/nginx/html", build.Directory(outputPath)).
-		WithExposedPort(*ExposedPort), nil
-}
-
-func (m *Build) BuildNext(
-	ctx context.Context,
-	// +optional
-	jobAttempt string,
-	repository string,
-	// +optional
-	ref string,
-	// +optional
-	path string,
-	// +optional
-	job string,
-	framework string,
-	// +optional
-	packageManager string,
-	// +optional
-	ExposedPort *int,
-) (*dagger.Container, error) {
-	if ExposedPort == nil {
-		ExposedPort = new(int)
-		*ExposedPort = 3000
-	}
-
-	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-
-	if _, err := build.Directory(".next").Entries(ctx); err != nil {
-		return nil, fmt.Errorf("expected .next directory not found — check your project's framework setting (currently %q)", framework)
-	}
-
-	if packageManager == "" {
-		packageManager = "pnpm"
-	}
-	container, err := build.
-		WithEntrypoint([]string{packageManager, "run", "start"}).
-		WithExposedPort(*ExposedPort).
-		Sync(ctx)
-
-	if err != nil {
-		return nil, fmt.Errorf("run Build: %w", err)
-	}
-
-	return container, nil
-}
-
-func getAngularOutputPath(ctx context.Context, build *dagger.Container) (string, error) {
-	file, err := build.Directory(".").File("/angular.json").Contents(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to read angular.json: %w", err)
-	}
-
-	// Decode into map[string]interface{}
-	var data map[string]interface{}
-	if err := json.Unmarshal([]byte(file), &data); err != nil {
-		return "", fmt.Errorf("failed to decode angular.json: %w", err)
-	}
-	fmt.Println(file)
-	// Access the first project's outputPath
-	projects := data["projects"].(map[string]interface{})
-	for _, project := range projects {
-		architect := project.(map[string]interface{})["architect"].(map[string]interface{})
-		build := architect["build"].(map[string]interface{})
-		options := build["options"].(map[string]interface{})
-		return options["outputPath"].(string), nil
-	}
-
-	return "", fmt.Errorf("outputPath not found")
 }
