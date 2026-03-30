@@ -35,11 +35,45 @@ func init() {
 		DefaultPort:     80,
 	}
 
+	frameworks["astro"] = FrameworkConfig{
+		Builder:         "static-nginx",
+		BuildOutputPath: "dist",
+		DefaultPort:     80,
+	}
+	frameworks["vite"] = FrameworkConfig{
+		Builder:         "static-nginx",
+		BuildOutputPath: "dist",
+		DefaultPort:     80,
+	}
+	frameworks["gatsby"] = FrameworkConfig{
+		Builder:         "static-nginx",
+		BuildOutputPath: "public",
+		DefaultPort:     80,
+	}
+
 	// Server (npm build → node runtime)
 	frameworks["nextjs"] = FrameworkConfig{
 		Builder:         "node-server",
 		BuildOutputPath: ".next",
 		StartCmd:        []string{"pnpm", "run", "start"},
+		DefaultPort:     3000,
+	}
+	frameworks["nuxt"] = FrameworkConfig{
+		Builder:         "node-server",
+		BuildOutputPath: ".output",
+		StartCmd:        []string{"node", ".output/server/index.mjs"},
+		DefaultPort:     3000,
+	}
+	frameworks["remix"] = FrameworkConfig{
+		Builder:         "node-server",
+		BuildOutputPath: "build",
+		StartCmd:        []string{"pnpm", "run", "start"},
+		DefaultPort:     3000,
+	}
+	frameworks["sveltekit"] = FrameworkConfig{
+		Builder:         "node-server",
+		BuildOutputPath: "build",
+		StartCmd:        []string{"node", "build"},
 		DefaultPort:     3000,
 	}
 }
