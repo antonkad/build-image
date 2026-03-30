@@ -96,6 +96,8 @@ func (m *Build) Publish(
 			container, err = m.BuildNodeServer(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, ExposedPort)
 		case "go-binary":
 			container, err = m.BuildGoBinary(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, ExposedPort)
+		case "python-server":
+			container, err = m.BuildPythonServer(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, ExposedPort)
 		default:
 			return "", fmt.Errorf("unsupported builder %q for framework %q", cfg.Builder, framework)
 		}
