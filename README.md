@@ -1,57 +1,77 @@
-                +--------------------+
-                |   Publish Function |
-                +--------------------+
-                          |
-                          v
-                +--------------------+
-                | Determine Framework|
-                +--------------------+
-                          |
-        +-----------------+-----------------+
-        |                                   |
-        v                                   v
-+------------------+              +------------------+
-| Framework: Next  |              | Framework: Others|
-+------------------+              +------------------+
-        |                                   |
-        v                                   v
-+------------------------+        +-----------------------+
-| Run buildNext helper   |        | Run buildNginx helper |
-| - Set entrypoint to    |        | - Serve via Nginx     |
-|   start app            |        |   on port 80          |
-+------------------------+        +-----------------------+
-        |                                   |
-        v                                   v
-+------------------+              +------------------+
-|    Run build     |              |     Run build    |
-+------------------+              +------------------+
+# build-image
 
-# Testing Build function
-```
-dagger call -j build --repository=https://github.com/user/repo --ref=main --path=examples/vue/
-dagger call -j build --repository=https://github.com/user/repo --ref=main --path=examples/angular/
-dagger call -j build --repository=https://github.com/user/repo --ref=main --path=examples/create-react-app/
-dagger call -j build --repository=https://github.com/user/repo --ref=main --path=examples/svelte/
-dagger call -j build --repository=https://github.com/user/repo --ref=main --path=examples/nextjs/
-```
-# Testing Publish function (calls BuildNext or BuildNginx internally)
-```
-dagger call -j publish --repository=https://github.com/user/repo --ref=main --path=examples/vue/ --framework=vue 
-dagger call -j publish --repository=https://github.com/user/repo --ref=main --path=examples/angular/ --framework=angular 
-dagger call -j publish --repository=https://github.com/user/repo --ref=main --path=examples/create-react-app/ --framework=react
-dagger call -j publish --repository=https://github.com/user/repo --ref=main --path=examples/svelte/ --framework=svelte 
-dagger call -j publish --repository=https://github.com/user/repo --ref=main --path=examples/nextjs/ --framework=next 
-```
-
-# Testing build-nginx function (calls Build internally)
-```
-dagger call -j build-nginx --repository=https://github.com/user/repo --ref=main --path=examples/vue/ --framework=vue
-dagger call -j build-nginx --repository=https://github.com/user/repo --ref=main --path=examples/angular/ --framework=angular 
-dagger call -j build-nginx --repository=https://github.com/user/repo --ref=main --path=examples/create-react-app/ --framework=react
-dagger call -j build-nginx --repository=https://github.com/user/repo --ref=main --path=examples/svelte/ --framework=svelte 
-```
-# Testing build-next function (calls Build internally)
-```
-dagger call -j build-next --repository=https://github.com/user/repo --ref=main --path=examples/nextjs/ --framework=next 
+Dagger module for building and publishing container images from git repositories.
 
 ```
+            +--------------------+
+            |   Publish Function |
+            +--------------------+
+                      |
+                      v
+            +--------------------+
+            | Determine Framework|
+            +--------------------+
+                      |
+        +-------------+-------------+
+        |                           |
+        v                           v
++------------------+      +------------------+
+| Node server      |      | Static (Nginx)   |
+| (next, nuxt,     |      | (react, vue,     |
+|  remix, sveltekit)|     |  svelte, angular) |
++------------------+      +------------------+
+        |                           |
+        v                           v
++------------------+      +------------------+
+| Build & publish  |      | Build & publish  |
++------------------+      +------------------+
+```
+
+## Usage
+
+```bash
+dagger call -m github.com/antonkad/build-image publish \
+  --repository=https://github.com/user/repo \
+  --ref=main \
+  --framework=react \
+  --image-name=my-app \
+  --commit-hash=abc123 \
+  --registry-url=registry.example.com \
+  --registry-user=admin \
+  --registry-password=env:REGISTRY_PASSWORD
+```
+
+### Optional flags
+
+```
+--path              Subdirectory within the repo
+--package-manager   Override package manager (default: pnpm for node)
+--dependencies-cmd  Override install command
+--build-cmd         Override build command
+--exposed-port      Override default port
+--job               Job ID for telemetry
+--jobAttempt        Job attempt ID for telemetry
+```
+
+### Supported frameworks
+
+| Framework   | Builder        |
+|-------------|----------------|
+| react       | static-nginx   |
+| vue         | static-nginx   |
+| svelte      | static-nginx   |
+| angular     | static-nginx   |
+| vite        | static-nginx   |
+| astro       | static-nginx   |
+| gatsby      | static-nginx   |
+| nextjs      | node-server    |
+| nuxt        | node-server    |
+| remix       | node-server    |
+| sveltekit   | node-server    |
+| go          | go-binary      |
+| fastapi     | python-server  |
+| flask       | python-server  |
+| django      | python-server  |
+| spring-boot | java-maven     |
+| rust        | rust-binary    |
+| dockerfile  | custom         |
