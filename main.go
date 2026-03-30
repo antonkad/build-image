@@ -164,7 +164,7 @@ func createDirectory(ctx context.Context, repository string, ref *string, path *
 	var gitRepo *dagger.Directory
 	var err error
 	if ref != nil && *ref != "" && !strings.EqualFold(*ref, "HEAD") {
-		gitRepo, err = dag.Git(repository).Branch(*ref).Tree().Sync(ctx)
+		gitRepo, err = dag.Git(repository).Ref(*ref).Tree().Sync(ctx)
 	} else {
 		gitRepo, err = dag.Git(repository).Head().Tree().Sync(ctx)
 	}
