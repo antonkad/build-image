@@ -85,7 +85,7 @@ func (m *Build) BuildGoBinary(
 	}
 
 	// Build step
-	bCmd := "go build -o /app ."
+	bCmd := "go build -o /out/app ."
 	if buildCmd != "" {
 		bCmd = buildCmd
 	}
@@ -108,7 +108,7 @@ func (m *Build) BuildGoBinary(
 	// Runtime stage: copy binary to distroless
 	runtime, err := dag.Container().
 		From(cfg.RuntimeImage).
-		WithFile("/app", builder.File("/app")).
+		WithFile("/app", builder.File("/out/app")).
 		WithEntrypoint(cfg.StartCmd).
 		WithExposedPort(*exposedPort).
 		Sync(ctx)
