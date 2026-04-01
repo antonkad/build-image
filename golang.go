@@ -59,7 +59,7 @@ func (m *Build) BuildGoBinary(
 	}
 
 	// Dependencies step
-	depCmd := "go mod download"
+	depCmd := "go mod download -x"
 	if dependenciesCmd != "" {
 		depCmd = dependenciesCmd
 	}
@@ -85,7 +85,7 @@ func (m *Build) BuildGoBinary(
 	}
 
 	// Build step
-	bCmd := "go build -o /out/app ."
+	bCmd := "go build -v -o /out/app ."
 	if buildCmd != "" {
 		bCmd = buildCmd
 	}
@@ -97,7 +97,7 @@ func (m *Build) BuildGoBinary(
 	builder, err = builder.
 		WithEnvVariable("CGO_ENABLED", "0").
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			`%s 2>&1 | while IFS= read -r line; do echo '{"jobAttempt":"%s","job":"%s","step":"build","message":"'"$line"'"}'; done`,
+			`set -o pipefail; %s 2>&1 | while IFS= read -r line; do echo '{"jobAttempt":"%s","job":"%s","step":"build","message":"'"$line"'"}'; done`,
 			bCmd, jobAttempt, job,
 		)}).
 		Sync(ctx)
