@@ -4,10 +4,13 @@ import (
 	"context"
 	"dagger/build/internal/dagger"
 	"fmt"
+	"regexp"
 
 	telemetry "github.com/dagger/otel-go"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+var goVersionRe = regexp.MustCompile(`(?m)^go\s+([\d.]+)`)
 
 func init() {
 	frameworks["go"] = FrameworkConfig{
@@ -20,8 +23,8 @@ func init() {
 }
 
 // BuildGoBinary builds a Go app into a static binary and packages it in a minimal distroless image.
-// Multi-stage: golang:1.24-alpine (build) → gcr.io/distroless/static (runtime).
-// Covers all Go frameworks (Gin, Fiber, Echo, net/http).
+// Auto-detects Go version from go.mod; falls back to golang:1.24-alpine.
+// Multi-stage: golang:{version}-alpine (build) → gcr.io/distroless/static (runtime).
 func (m *Build) BuildGoBinary(
 	ctx context.Context,
 	// +optional
@@ -58,6 +61,15 @@ func (m *Build) BuildGoBinary(
 		return nil, fmt.Errorf("error creating directory: %v", err)
 	}
 
+	// Detect Go version from go.mod
+	baseImage := cfg.BaseImage
+	goModContents, err := source.File("go.mod").Contents(ctx)
+	if err == nil {
+		if matches := goVersionRe.FindStringSubmatch(goModContents); len(matches) > 1 {
+			baseImage = fmt.Sprintf("golang:%s-alpine", matches[1])
+		}
+	}
+
 	// Dependencies step
 	depCmd := "go mod download -x"
 	if dependenciesCmd != "" {
@@ -68,7 +80,7 @@ func (m *Build) BuildGoBinary(
 	depSpan.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 
 	builder := dag.Container().
-		From(cfg.BaseImage).
+		From(baseImage).
 		WithDirectory("/src", source).
 		WithWorkdir("/src").
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod")).
