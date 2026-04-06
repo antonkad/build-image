@@ -17,38 +17,38 @@ func init() {
 	frameworks["react"] = FrameworkConfig{
 		Builder:         "static-nginx",
 		BuildOutputPath: "build",
-		DefaultPort:     80,
+		DefaultPort:     8080,
 	}
 	frameworks["vue"] = FrameworkConfig{
 		Builder:         "static-nginx",
 		BuildOutputPath: "dist",
-		DefaultPort:     80,
+		DefaultPort:     8080,
 	}
 	frameworks["svelte"] = FrameworkConfig{
 		Builder:         "static-nginx",
 		BuildOutputPath: "public",
-		DefaultPort:     80,
+		DefaultPort:     8080,
 	}
 	frameworks["angular"] = FrameworkConfig{
 		Builder:         "static-nginx",
 		BuildOutputPath: "", // resolved from angular.json
-		DefaultPort:     80,
+		DefaultPort:     8080,
 	}
 
 	frameworks["astro"] = FrameworkConfig{
 		Builder:         "static-nginx",
 		BuildOutputPath: "dist",
-		DefaultPort:     80,
+		DefaultPort:     8080,
 	}
 	frameworks["vite"] = FrameworkConfig{
 		Builder:         "static-nginx",
 		BuildOutputPath: "dist",
-		DefaultPort:     80,
+		DefaultPort:     8080,
 	}
 	frameworks["gatsby"] = FrameworkConfig{
 		Builder:         "static-nginx",
 		BuildOutputPath: "public",
-		DefaultPort:     80,
+		DefaultPort:     8080,
 	}
 
 	// Server (npm build → node runtime)
@@ -169,6 +169,18 @@ func (m *Build) NpmBuild(
 	return build, err
 }
 
+func nginxConf(port int) string {
+	return fmt.Sprintf(`server {
+    listen %d;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}`, port)
+}
+
 // BuildStaticNginx builds a JS app and serves the output with nginx.
 // Used for: react, vue, svelte, angular, vite, astro (static), gatsby, etc.
 func (m *Build) BuildStaticNginx(
@@ -211,6 +223,7 @@ func (m *Build) BuildStaticNginx(
 		}
 		return dag.Container().From("nginx:1.25-alpine").
 			WithDirectory("/usr/share/nginx/html", build.Directory(outputPath)).
+			WithNewFile("/etc/nginx/conf.d/default.conf", nginxConf(*exposedPort)).
 			WithExposedPort(*exposedPort), nil
 	}
 
@@ -221,6 +234,7 @@ func (m *Build) BuildStaticNginx(
 
 	return dag.Container().From("nginx:1.25-alpine").
 		WithDirectory("/usr/share/nginx/html", build.Directory(outputPath)).
+		WithNewFile("/etc/nginx/conf.d/default.conf", nginxConf(*exposedPort)).
 		WithExposedPort(*exposedPort), nil
 }
 
