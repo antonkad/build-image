@@ -67,6 +67,10 @@ func (m *Build) Publish(
 	// Override the default build command (e.g. "npm run build:prod")
 	buildCmd string,
 	// +optional
+	// Override the runtime version (e.g. "22" for Node 22, "3.13" for Python 3.13).
+	// For JS frameworks, auto-detected from .nvmrc / .node-version / package.json engines if omitted.
+	runtimeVersion string,
+	// +optional
 	ExposedPort *int,
 	// Image name for the registry (e.g. project ID)
 	imageName string,
@@ -91,17 +95,17 @@ func (m *Build) Publish(
 		}
 		switch cfg.Builder {
 		case "static-nginx":
-			container, err = m.BuildStaticNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, ExposedPort)
+			container, err = m.BuildStaticNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, runtimeVersion, ExposedPort)
 		case "node-server":
-			container, err = m.BuildNodeServer(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, ExposedPort)
+			container, err = m.BuildNodeServer(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, runtimeVersion, ExposedPort)
 		case "go-binary":
-			container, err = m.BuildGoBinary(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, ExposedPort)
+			container, err = m.BuildGoBinary(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, runtimeVersion, ExposedPort)
 		case "python-server":
-			container, err = m.BuildPythonServer(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, ExposedPort)
+			container, err = m.BuildPythonServer(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, runtimeVersion, ExposedPort)
 		case "java-maven":
-			container, err = m.BuildJavaMaven(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, ExposedPort)
+			container, err = m.BuildJavaMaven(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, runtimeVersion, ExposedPort)
 		case "rust-binary":
-			container, err = m.BuildRustBinary(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, ExposedPort)
+			container, err = m.BuildRustBinary(ctx, jobAttempt, repository, ref, path, job, framework, dependenciesCmd, buildCmd, runtimeVersion, ExposedPort)
 		default:
 			return "", fmt.Errorf("unsupported builder %q for framework %q", cfg.Builder, framework)
 		}

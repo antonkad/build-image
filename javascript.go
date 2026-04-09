@@ -5,12 +5,15 @@ import (
 	"dagger/build/internal/dagger"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	telemetry "github.com/dagger/otel-go"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+var nodeMajorVersionRe = regexp.MustCompile(`(\d+)`)
 
 func init() {
 	// Static (npm build → copy output to nginx)
@@ -78,7 +81,61 @@ func init() {
 	}
 }
 
-func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAttempt string, job string, packageManager string, dependenciesCmd string) *dagger.Container {
+// resolveNodeVersion determines the Node.js Docker image tag to use.
+// Priority: explicit override → .nvmrc → .node-version → package.json engines.node → "22" (LTS).
+// Returns a full image reference like "node:22-slim".
+func resolveNodeVersion(ctx context.Context, source *dagger.Directory, override string) string {
+	const fallback = "node:22-slim"
+
+	// 1. Explicit override wins
+	if override != "" {
+		return fmt.Sprintf("node:%s-slim", override)
+	}
+
+	// 2. Try .nvmrc
+	if contents, err := source.File(".nvmrc").Contents(ctx); err == nil {
+		if v := extractMajorVersion(strings.TrimSpace(contents)); v != "" {
+			return fmt.Sprintf("node:%s-slim", v)
+		}
+	}
+
+	// 3. Try .node-version
+	if contents, err := source.File(".node-version").Contents(ctx); err == nil {
+		if v := extractMajorVersion(strings.TrimSpace(contents)); v != "" {
+			return fmt.Sprintf("node:%s-slim", v)
+		}
+	}
+
+	// 4. Try package.json engines.node
+	if contents, err := source.File("package.json").Contents(ctx); err == nil {
+		var pkg struct {
+			Engines struct {
+				Node string `json:"node"`
+			} `json:"engines"`
+		}
+		if err := json.Unmarshal([]byte(contents), &pkg); err == nil && pkg.Engines.Node != "" {
+			if v := extractMajorVersion(pkg.Engines.Node); v != "" {
+				return fmt.Sprintf("node:%s-slim", v)
+			}
+		}
+	}
+
+	// 5. Fallback to LTS
+	return fallback
+}
+
+// extractMajorVersion pulls the first major version number from a version string.
+// Examples: "v22.12.0" → "22", "^20.19 || ^22" → "20", ">=24" → "24", "18.x" → "18".
+func extractMajorVersion(s string) string {
+	// Strip leading "v" prefix
+	s = strings.TrimPrefix(s, "v")
+	if m := nodeMajorVersionRe.FindString(s); m != "" {
+		return m
+	}
+	return ""
+}
+
+func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAttempt string, job string, packageManager string, dependenciesCmd string, nodeImage string) *dagger.Container {
 	ctx, span := Tracer().Start(ctx, "dependencies")
 	span.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 	defer span.End()
@@ -97,7 +154,7 @@ func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAtt
 	}
 
 	install, _ := dag.Container().
-		From("node:23-slim").
+		From(nodeImage).
 		WithExec([]string{"sh", "-c", "apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*"}).
 		WithDirectory("/src", source).
 		WithExec([]string{"npm", "install", "-g", "pnpm"}).
@@ -130,6 +187,9 @@ func (m *Build) NpmBuild(
 	dependenciesCmd string,
 	// +optional
 	buildCmd string,
+	// +optional
+	// Override Node.js major version (e.g. "22"). Auto-detected if omitted.
+	runtimeVersion string,
 ) (_ *dagger.Container, rerr error) {
 	stepName := "build"
 
@@ -144,7 +204,9 @@ func (m *Build) NpmBuild(
 		return nil, fmt.Errorf("Error creating directory: %v", err)
 	}
 
-	installed := m.NpmInstall(ctx, source, jobAttempt, job, packageManager, dependenciesCmd)
+	nodeImage := resolveNodeVersion(ctx, source, runtimeVersion)
+
+	installed := m.NpmInstall(ctx, source, jobAttempt, job, packageManager, dependenciesCmd, nodeImage)
 
 	// "build" span only covers the actual build command
 	ctx, span := Tracer().Start(ctx, "build")
@@ -202,6 +264,9 @@ func (m *Build) BuildStaticNginx(
 	// +optional
 	buildCmd string,
 	// +optional
+	// Override Node.js major version (e.g. "22"). Auto-detected if omitted.
+	runtimeVersion string,
+	// +optional
 	exposedPort *int,
 ) (*dagger.Container, error) {
 	cfg := frameworks[framework]
@@ -210,7 +275,7 @@ func (m *Build) BuildStaticNginx(
 		*exposedPort = cfg.DefaultPort
 	}
 
-	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager, dependenciesCmd, buildCmd)
+	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager, dependenciesCmd, buildCmd, runtimeVersion)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -259,6 +324,9 @@ func (m *Build) BuildNodeServer(
 	// +optional
 	buildCmd string,
 	// +optional
+	// Override Node.js major version (e.g. "22"). Auto-detected if omitted.
+	runtimeVersion string,
+	// +optional
 	exposedPort *int,
 ) (*dagger.Container, error) {
 	cfg := frameworks[framework]
@@ -267,7 +335,7 @@ func (m *Build) BuildNodeServer(
 		*exposedPort = cfg.DefaultPort
 	}
 
-	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager, dependenciesCmd, buildCmd)
+	build, err := m.NpmBuild(ctx, jobAttempt, repository, ref, path, job, packageManager, dependenciesCmd, buildCmd, runtimeVersion)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}

@@ -44,6 +44,9 @@ func (m *Build) BuildGoBinary(
 	// Override the default build command (e.g. "go build -o /app ./cmd/server")
 	buildCmd string,
 	// +optional
+	// Override runtime version (unused for Go — version is auto-detected from go.mod)
+	runtimeVersion string,
+	// +optional
 	exposedPort *int,
 ) (_ *dagger.Container, rerr error) {
 	cfg := frameworks[framework]

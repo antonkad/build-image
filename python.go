@@ -51,6 +51,9 @@ func (m *Build) BuildPythonServer(
 	// Override the default build command (not used for most Python apps)
 	buildCmd string,
 	// +optional
+	// Override runtime version (e.g. "3.13" for Python 3.13)
+	runtimeVersion string,
+	// +optional
 	exposedPort *int,
 ) (_ *dagger.Container, rerr error) {
 	cfg := frameworks[framework]

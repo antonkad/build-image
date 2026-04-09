@@ -42,6 +42,9 @@ func (m *Build) BuildRustBinary(
 	// Override the default build command (e.g. "cargo build --release --bin myapp")
 	buildCmd string,
 	// +optional
+	// Override runtime version (unused for Rust currently)
+	runtimeVersion string,
+	// +optional
 	exposedPort *int,
 ) (_ *dagger.Container, rerr error) {
 	cfg := frameworks[framework]

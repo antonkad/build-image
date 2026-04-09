@@ -42,6 +42,9 @@ func (m *Build) BuildJavaMaven(
 	// Override the default build command (e.g. "mvn package -Pprod -DskipTests")
 	buildCmd string,
 	// +optional
+	// Override runtime version (unused for Java currently)
+	runtimeVersion string,
+	// +optional
 	exposedPort *int,
 ) (_ *dagger.Container, rerr error) {
 	cfg := frameworks[framework]
