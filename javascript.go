@@ -29,7 +29,7 @@ func init() {
 	}
 	frameworks["svelte"] = FrameworkConfig{
 		Builder:         "static-nginx",
-		BuildOutputPath: "public",
+		BuildOutputPath: "build", // SvelteKit outputs to "build"; old Svelte used "public" — override via outputDirectory if needed
 		DefaultPort:     8080,
 	}
 	frameworks["angular"] = FrameworkConfig{
@@ -269,6 +269,9 @@ func (m *Build) BuildStaticNginx(
 	// Override Node.js major version (e.g. "22"). Auto-detected if omitted.
 	runtimeVersion string,
 	// +optional
+	// Override the build output directory (e.g. "build", "dist"). Uses framework default when empty.
+	outputDirectory string,
+	// +optional
 	exposedPort *int,
 ) (*dagger.Container, error) {
 	cfg := frameworks[framework]
@@ -295,6 +298,9 @@ func (m *Build) BuildStaticNginx(
 	}
 
 	outputPath := cfg.BuildOutputPath
+	if outputDirectory != "" {
+		outputPath = outputDirectory
+	}
 	if _, err := build.Directory(outputPath).Entries(ctx); err != nil {
 		return nil, fmt.Errorf("expected output directory %q not found for framework %q — check your project's framework setting", outputPath, framework)
 	}

@@ -71,6 +71,9 @@ func (m *Build) Publish(
 	// For JS frameworks, auto-detected from .nvmrc / .node-version / package.json engines if omitted.
 	runtimeVersion string,
 	// +optional
+	// Override the build output directory (e.g. "build", "dist"). Uses framework default when empty.
+	outputDirectory string,
+	// +optional
 	ExposedPort *int,
 	// Image name for the registry (e.g. project ID)
 	imageName string,
@@ -95,7 +98,7 @@ func (m *Build) Publish(
 		}
 		switch cfg.Builder {
 		case "static-nginx":
-			container, err = m.BuildStaticNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, runtimeVersion, ExposedPort)
+			container, err = m.BuildStaticNginx(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, runtimeVersion, outputDirectory, ExposedPort)
 		case "node-server":
 			container, err = m.BuildNodeServer(ctx, jobAttempt, repository, ref, path, job, framework, packageManager, dependenciesCmd, buildCmd, runtimeVersion, ExposedPort)
 		case "go-binary":
