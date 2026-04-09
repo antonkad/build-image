@@ -4,10 +4,59 @@ import (
 	"context"
 	"dagger/build/internal/dagger"
 	"fmt"
+	"regexp"
+	"strings"
 
 	telemetry "github.com/dagger/otel-go"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+var javaMajorRe = regexp.MustCompile(`(\d+)`)
+
+// resolveJavaVersion detects the Java major version from project files.
+// Priority: explicit override → .java-version → .sdkmanrc → default from FrameworkConfig.
+// Returns both build and runtime image tags (e.g. "maven:3.9-eclipse-temurin-21", "eclipse-temurin:21-jre-alpine").
+func resolveJavaVersion(ctx context.Context, source *dagger.Directory, override string, defaultBuild string, defaultRuntime string) (string, string) {
+	extractMajor := func(s string) string {
+		s = strings.TrimSpace(s)
+		if m := javaMajorRe.FindString(s); m != "" {
+			return m
+		}
+		return ""
+	}
+
+	var major string
+	if override != "" {
+		major = extractMajor(override)
+	}
+
+	if major == "" {
+		// .java-version (e.g. "21" or "21.0.2")
+		if contents, err := source.File(".java-version").Contents(ctx); err == nil {
+			major = extractMajor(contents)
+		}
+	}
+
+	if major == "" {
+		// .sdkmanrc (e.g. "java=21.0.2-tem")
+		if contents, err := source.File(".sdkmanrc").Contents(ctx); err == nil {
+			for _, line := range strings.Split(contents, "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "java=") {
+					v := strings.TrimPrefix(strings.TrimSpace(line), "java=")
+					major = extractMajor(v)
+					break
+				}
+			}
+		}
+	}
+
+	if major == "" {
+		return defaultBuild, defaultRuntime
+	}
+
+	return fmt.Sprintf("maven:3.9-eclipse-temurin-%s", major),
+		fmt.Sprintf("eclipse-temurin:%s-jre-alpine", major)
+}
 
 func init() {
 	frameworks["spring-boot"] = FrameworkConfig{
@@ -62,6 +111,9 @@ func (m *Build) BuildJavaMaven(
 		return nil, fmt.Errorf("error creating directory: %v", err)
 	}
 
+	// Resolve Java version
+	buildImage, runtimeImage := resolveJavaVersion(ctx, source, runtimeVersion, cfg.BaseImage, cfg.RuntimeImage)
+
 	// Dependencies step — download Maven dependencies into local cache
 	depCmd := "mvn dependency:go-offline -B"
 	if dependenciesCmd != "" {
@@ -72,7 +124,7 @@ func (m *Build) BuildJavaMaven(
 	depSpan.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 
 	builder := dag.Container().
-		From(cfg.BaseImage).
+		From(buildImage).
 		WithDirectory("/src", source).
 		WithWorkdir("/src").
 		WithMountedCache("/root/.m2", dag.CacheVolume("maven-m2")).
@@ -114,7 +166,7 @@ func (m *Build) BuildJavaMaven(
 
 	// Runtime stage: copy JAR into minimal JRE image
 	runtime, err := dag.Container().
-		From(cfg.RuntimeImage).
+		From(runtimeImage).
 		WithFile("/app/app.jar", builder.File("/app.jar")).
 		WithEntrypoint(cfg.StartCmd).
 		WithExposedPort(*exposedPort).

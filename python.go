@@ -4,10 +4,37 @@ import (
 	"context"
 	"dagger/build/internal/dagger"
 	"fmt"
+	"strings"
 
 	telemetry "github.com/dagger/otel-go"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+// resolvePythonVersion detects the Python version from project files.
+// Priority: explicit override → .python-version → runtime.txt → default from FrameworkConfig.
+func resolvePythonVersion(ctx context.Context, source *dagger.Directory, override string, defaultImage string) string {
+	if override != "" {
+		return fmt.Sprintf("python:%s-slim", override)
+	}
+
+	// .python-version (e.g. "3.13.1" or "3.12")
+	if contents, err := source.File(".python-version").Contents(ctx); err == nil {
+		v := strings.TrimSpace(contents)
+		if parts := strings.SplitN(v, ".", 3); len(parts) >= 2 {
+			return fmt.Sprintf("python:%s.%s-slim", parts[0], parts[1])
+		}
+	}
+
+	// runtime.txt (Heroku-style, e.g. "python-3.12.0")
+	if contents, err := source.File("runtime.txt").Contents(ctx); err == nil {
+		v := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(contents), "python-"))
+		if parts := strings.SplitN(v, ".", 3); len(parts) >= 2 {
+			return fmt.Sprintf("python:%s.%s-slim", parts[0], parts[1])
+		}
+	}
+
+	return defaultImage
+}
 
 func init() {
 	frameworks["fastapi"] = FrameworkConfig{
@@ -71,6 +98,9 @@ func (m *Build) BuildPythonServer(
 		return nil, fmt.Errorf("error creating directory: %v", err)
 	}
 
+	// Resolve Python version
+	baseImage := resolvePythonVersion(ctx, source, runtimeVersion, cfg.BaseImage)
+
 	// Dependencies step
 	depCmd := "pip install --no-cache-dir -r requirements.txt"
 	if dependenciesCmd != "" {
@@ -81,7 +111,7 @@ func (m *Build) BuildPythonServer(
 	depSpan.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 
 	builder := dag.Container().
-		From(cfg.BaseImage).
+		From(baseImage).
 		WithDirectory("/app", source).
 		WithWorkdir("/app").
 		WithMountedCache("/root/.cache/pip", dag.CacheVolume("pip-cache")).

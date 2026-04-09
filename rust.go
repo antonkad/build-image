@@ -4,10 +4,39 @@ import (
 	"context"
 	"dagger/build/internal/dagger"
 	"fmt"
+	"regexp"
+	"strings"
 
 	telemetry "github.com/dagger/otel-go"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+var rustChannelRe = regexp.MustCompile(`channel\s*=\s*"([^"]+)"`)
+
+// resolveRustVersion detects the Rust toolchain version from project files.
+// Priority: explicit override → rust-toolchain.toml → rust-toolchain → default from FrameworkConfig.
+func resolveRustVersion(ctx context.Context, source *dagger.Directory, override string, defaultImage string) string {
+	if override != "" {
+		return fmt.Sprintf("rust:%s-slim", override)
+	}
+
+	// rust-toolchain.toml (e.g. [toolchain]\nchannel = "1.83")
+	if contents, err := source.File("rust-toolchain.toml").Contents(ctx); err == nil {
+		if m := rustChannelRe.FindStringSubmatch(contents); len(m) > 1 {
+			return fmt.Sprintf("rust:%s-slim", m[1])
+		}
+	}
+
+	// rust-toolchain (plain text, e.g. "1.83.0" or "stable")
+	if contents, err := source.File("rust-toolchain").Contents(ctx); err == nil {
+		v := strings.TrimSpace(contents)
+		if v != "" && v != "stable" && v != "nightly" && v != "beta" {
+			return fmt.Sprintf("rust:%s-slim", v)
+		}
+	}
+
+	return defaultImage
+}
 
 func init() {
 	frameworks["rust"] = FrameworkConfig{
@@ -62,6 +91,9 @@ func (m *Build) BuildRustBinary(
 		return nil, fmt.Errorf("error creating directory: %v", err)
 	}
 
+	// Resolve Rust version
+	baseImage := resolveRustVersion(ctx, source, runtimeVersion, cfg.BaseImage)
+
 	// Dependencies step — fetch crates into the cargo registry cache
 	depCmd := "cargo fetch"
 	if dependenciesCmd != "" {
@@ -72,7 +104,7 @@ func (m *Build) BuildRustBinary(
 	depSpan.SetAttributes(attribute.String("kad.jobAttempt", jobAttempt))
 
 	builder := dag.Container().
-		From(cfg.BaseImage).
+		From(baseImage).
 		WithDirectory("/src", source).
 		WithWorkdir("/src").
 		WithMountedCache("/usr/local/cargo/registry", dag.CacheVolume("cargo-registry")).
