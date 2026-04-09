@@ -155,7 +155,6 @@ func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAtt
 
 	install, _ := dag.Container().
 		From(nodeImage).
-		WithExec([]string{"sh", "-c", "apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*"}).
 		WithDirectory("/src", source).
 		WithExec([]string{"npm", "install", "-g", "pnpm"}).
 		WithWorkdir("/src").
@@ -226,7 +225,7 @@ func (m *Build) NpmBuild(
 
 	build, err := installed.
 		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			"%s 2>&1 | while IFS= read -r line; do echo \"$line\" | jq -c -R '{jobAttempt: \"%s\", job: \"%s\", step: \"%s\", message: .}'; done",
+			"%s 2>&1 | while IFS= read -r line; do echo '{\"jobAttempt\":\"%s\",\"job\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
 			commandStr, jobAttempt, job, stepName,
 		)}).
 		Sync(ctx)
