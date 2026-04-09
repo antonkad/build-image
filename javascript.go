@@ -160,8 +160,8 @@ func (m *Build) NpmInstall(ctx context.Context, source *dagger.Directory, jobAtt
 		WithWorkdir("/src").
 		WithMountedCache("/root/.npm", dag.CacheVolume("node-21")).
 		WithEnvVariable("CACHEBUSTER", time.Now().String()).
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			"%s 2>&1 | while IFS= read -r line; do echo '{\"jobAttempt\":\"%s\",\"job\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
+		WithExec([]string{"/bin/bash", "-c", fmt.Sprintf(
+			"set -o pipefail; %s 2>&1 | while IFS= read -r line; do echo '{\"jobAttempt\":\"%s\",\"job\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
 			commandStr, jobAttempt, job, stepName,
 		)}).
 		Sync(ctx)
@@ -224,8 +224,8 @@ func (m *Build) NpmBuild(
 	}
 
 	build, err := installed.
-		WithExec([]string{"/bin/sh", "-c", fmt.Sprintf(
-			"%s 2>&1 | while IFS= read -r line; do echo '{\"jobAttempt\":\"%s\",\"job\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
+		WithExec([]string{"/bin/bash", "-c", fmt.Sprintf(
+			"set -o pipefail; %s 2>&1 | while IFS= read -r line; do echo '{\"jobAttempt\":\"%s\",\"job\":\"%s\",\"step\":\"%s\",\"message\":\"'\"$line\"'\"}'; done",
 			commandStr, jobAttempt, job, stepName,
 		)}).
 		Sync(ctx)
