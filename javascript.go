@@ -207,6 +207,9 @@ func (m *Build) NpmBuild(
 	nodeImage := resolveNodeVersion(ctx, source, runtimeVersion)
 
 	installed := m.NpmInstall(ctx, source, jobAttempt, job, packageManager, dependenciesCmd, nodeImage)
+	if installed == nil {
+		return nil, fmt.Errorf("error installing dependencies")
+	}
 
 	// "build" span only covers the actual build command
 	ctx, span := Tracer().Start(ctx, "build")
