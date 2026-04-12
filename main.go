@@ -75,6 +75,9 @@ func (m *Build) Publish(
 	outputDirectory string,
 	// +optional
 	ExposedPort *int,
+	// +optional
+	// Relative path to a Dockerfile, when framework is "dockerfile". Defaults to "Dockerfile".
+	dockerfile string,
 	// Image name for the registry (e.g. project ID)
 	imageName string,
 	// Commit hash used as the image tag
@@ -90,7 +93,7 @@ func (m *Build) Publish(
 	var err error
 
 	if framework == "dockerfile" {
-		container, err = m.BuildDocker(ctx, jobAttempt, repository, ref, path, job)
+		container, err = m.BuildDocker(ctx, jobAttempt, repository, ref, path, job, dockerfile)
 	} else {
 		cfg, ok := frameworks[framework]
 		if !ok {
@@ -145,9 +148,15 @@ func (m *Build) BuildDocker(
 	ref string,
 	path string,
 	job string,
+	// +optional
+	// Relative path to the Dockerfile within the repo. Defaults to "Dockerfile".
+	dockerfile string,
 ) (*dagger.Container, error) {
 	if ref == "" {
 		ref = "HEAD"
+	}
+	if dockerfile == "" {
+		dockerfile = "Dockerfile"
 	}
 
 	source, err := createDirectory(ctx, repository, &ref, &path, jobAttempt, job)
@@ -157,7 +166,7 @@ func (m *Build) BuildDocker(
 
 	build, err := source.
 		DockerBuild(dagger.DirectoryDockerBuildOpts{
-			Dockerfile: "Dockerfile",
+			Dockerfile: dockerfile,
 		}).Sync(ctx)
 
 	return build, err
